@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Meteo Lo Gullo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>- Meteo Lo Gullo</h1>
+  </header>
+
+  <div id="sidebar">
+    <button onclick="aggiornaMappa('attuali')">T°C</button>
+    <button onclick="aggiornaMappa('max')">MAX</button>
+    <button onclick="aggiornaMappa('min')">MIN</button>
+    <button onclick="aggiornaMappa('umidita')">UR%</button>
+    <button onclick="aggiornaMappa('raffica')">RAF</button>
+    <button onclick="aggiornaMappa('mm')">MM</button>
+    <button onclick="aggiornaMappa('mlg')">MLG</button>
+    <button onclick="aggiornaMappa('rad')">RAD</button>
+  </div>
+
+  <main>
+    <div id="map">[La mappa sarà caricata qui]</div>
+    <div id="info">
+      <p>Scorri per i dati testuali ↓</p>
+      <label><input type="checkbox" id="riepilogo"> Visualizza riepilogo meteo testuale</label>
+      <label><input type="checkbox" id="estremi"> Mostra estremi giornalieri</label>
+      <div>
+        <label>Filtra per provincia:
+          <select id="filtroProvincia">
+            <option value="tutte">Tutte</option>
+          </select>
+        </label>
+        <label>Ordina per:
+          <select id="ordinaPer">
+            <option value="caldo">Stazione più calda</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="soloMLG"> Mostra solo stazioni MLG</label>
+      </div>
+      <div id="tabellaDati">[Dati delle stazioni meteo]</div>
+    </div>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
