@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Webcam Spiaggia</title>
+  <style>
+    body {
+      background-color: #f0f0f0;
+      text-align: center;
+      padding: 2em;
+    }
+    img {
+      border: 5px solid #222;
+      max-width: 90vw;
+      height: auto;
+      box-shadow: 0 0 20px #999;
+    }
+  </style>
+</head>
+<body>
+  <div id="image-container">
+    <p>Caricamento in corso…</p>
+  </div>
+
+  <script>
+    async function loadImage() {
+      try {
+        const res = await fetch('https://flat-mountain-90b0.agn19278.workers.dev/');
+        const json = await res.json();
+
+        const data = json.data;
+        const dates = Object.keys(data).sort().reverse();
+
+        for (let date of dates) {
+          const entry = data[date];
+          if (entry.picture_url) {
+            document.getElementById('image-container').innerHTML = `
+              <img src="${entry.picture_url}" alt="Webcam Spiaggia">
+            `;
+            return;
+          }
+        }
+
+        document.getElementById('image-container').innerHTML = '<p>Nessuna immagine trovata.</p>';
+      } catch (err) {
+        document.getElementById('image-container').innerHTML = '<p>Errore nel caricamento.</p>';
+        console.error(err);
+      }
+    }
+
+    loadImage();
+  </script>
+</body>
+</html>
