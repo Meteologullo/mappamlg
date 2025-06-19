@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Condizione Termica - Amantea</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 18px;
+      margin: 0;
+      padding: 10px;
+      background: transparent;
+      color: #003366;
+    }
+    #condizione {
+      font-weight: bold;
+      color: #cc3300;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    Condizione termica attuale: <span id="condizione">Caricamento...</span>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDasXnVu7uIEjpwtQ-XbVilREGmAZSBjVE",
+      authDomain: "meteo-estremami.firebaseapp.com",
+      projectId: "meteo-estremami",
+      storageBucket: "meteo-estremami.appspot.com",
+      messagingSenderId: "469441159034",
+      appId: "1:469441159034:web:b687adef4a7a742499c0c3"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    function calcolaCondizioneTermica(temp, umidita) {
+      if (isNaN(temp) || isNaN(umidita)) return "-";
+      let condizione = "";
+      if (temp <= -10) condizione = "Gelo intenso";
+      else if (temp <= -5) condizione = "Gelo";
+      else if (temp <= 0) condizione = "Freddo intenso";
+      else if (temp <= 5) condizione = "Freddo";
+      else if (temp <= 15) condizione = "Fresco";
+      else if (temp <= 22) condizione = "Confortevole";
+      else if (temp <= 26) condizione = "Molto confortevole";
+      else if (temp <= 29) condizione = "Tiepido";
+      else if (temp <= 33) condizione = "Caldo";
+      else if (temp <= 37) condizione = "Caldo intenso";
+      else if (temp <= 42) condizione = "Caldo estremo";
+      else condizione = "Estremo";
+
+      if (umidita < 30) condizione += " secco";
+      else if (umidita >= 60 && umidita <= 89) condizione += " umido";
+      else if (umidita >= 90) condizione += " molto umido";
+
+      return condizione;
+    }
+
+    async function caricaCondizione() {
+      const q = query(collection(db, "osservazioni"), where("stationId", "==", "IAMANT7"));
+      const snapshot = await getDocs(q);
+
+      let temp = null;
+      let umidita = null;
+
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        if (typeof d.temperatura === "number") temp = d.temperatura;
+        if (typeof d.umidita === "number") umidita = d.umidita;
+      });
+
+      const condizione = calcolaCondizioneTermica(temp, umidita);
+      document.getElementById("condizione").textContent = condizione;
+    }
+
+    caricaCondizione();
+    setInterval(caricaCondizione, 5 * 60 * 1000); // aggiorna ogni 5 minuti
+  </script>
+</body>
+</html>
