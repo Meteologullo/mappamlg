@@ -1,8 +1,39 @@
-<img
-  src="https://spiaggia-cam.agn19278.workers.dev/?ts=<!--# echo var=\"DATE_LOCAL\" -->"
-  alt="Webcam Spiaggia di Amantea (live)"
-  width="640"
-/>
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Webcam - Spiaggia di Amantea</title>
+  <style>
+    html,body{
+      margin:0;padding:0;height:100%;width:100%;background:#000;
+      display:flex;justify-content:center;align-items:center;
+      font-family:system-ui,Arial,sans-serif;color:#fff
+    }
+    img{
+      max-width:100%;
+      max-height:100%;
+      object-fit:contain;
+    }
+  </style>
+</head>
+<body>
 
+  <!-- l'immagine live: puntiamo al Worker Cloudflare -->
+  <img id="webcam"
+       src="https://spiaggia-cam.agn19278.workers.dev/?ts=1"
+       alt="Webcam Spiaggia di Amantea">
 
+  <script>
+    /* aggiorna lo scatto ogni 60 s sostituendo il cache-buster */
+    const img   = document.getElementById('webcam');
+    const delay = 60_000;   // 60 000 ms = 60 s
 
+    setInterval(() => {
+      const ts   = Date.now();
+      const base = 'https://spiaggia-cam.agn19278.workers.dev/';
+      img.src    = `${base}?ts=${ts}`;     // forza il reload
+    }, delay);
+  </script>
+
+</body>
+</html>
