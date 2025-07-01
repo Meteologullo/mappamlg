@@ -2,37 +2,36 @@
 <html lang="it">
 <head>
   <meta charset="utf-8">
-  <title>Webcam - Spiaggia di Amantea</title>
+  <title>Webcam – Spiaggia di Amantea</title>
   <style>
     html,body{
-      margin:0;padding:0;height:100%;width:100%;background:#000;
-      display:flex;justify-content:center;align-items:center;
+      margin:0;height:100%;background:#000;
+      display:flex;align-items:center;justify-content:center;
       font-family:system-ui,Arial,sans-serif;color:#fff
     }
-    img{
-      max-width:100%;
-      max-height:100%;
-      object-fit:contain;
-    }
+    img{max-width:100%;max-height:100%;object-fit:contain}
   </style>
 </head>
 <body>
 
-  <!-- l'immagine live: puntiamo al Worker Cloudflare -->
-  <img id="webcam"
-       src="https://spiaggia-cam.agn19278.workers.dev/?ts=1"
-       alt="Webcam Spiaggia di Amantea">
+  <img id="webcam" alt="Webcam Spiaggia di Amantea">
 
   <script>
-    /* aggiorna lo scatto ogni 60 s sostituendo il cache-buster */
-    const img   = document.getElementById('webcam');
-    const delay = 60_000;   // 60 000 ms = 60 s
+    /* ———————————————————————————————
+       CONFIGURA QUI l’URL del tuo Worker
+       (copialo dal pulsante “Visit” in Cloudflare)
+    ————————————————————————————————*/
+    const WORKER_URL = "https://spiaggia-cam-worker.agn19278.workers.dev/";
 
-    setInterval(() => {
-      const ts   = Date.now();
-      const base = 'https://spiaggia-cam.agn19278.workers.dev/';
-      img.src    = `${base}?ts=${ts}`;     // forza il reload
-    }, delay);
+    const img   = document.getElementById("webcam");
+    const DELAY = 60_000;   // 60 s tra un refresh e l’altro
+
+    function update() {
+      const ts = Date.now();               // cache-buster
+      img.src  = WORKER_URL + "?ts=" + ts; // forza reload
+    }
+    update();                  // prima volta subito
+    setInterval(update, DELAY); // poi ogni 60 s
   </script>
 
 </body>
