@@ -2,29 +2,34 @@
 <html lang="it">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Cache-Control" content="no-store">
   <title>Webcam – Spiaggia di Amantea</title>
   <style>
     html,body{
       margin:0;height:100%;background:#000;
-      display:flex;align-items:center;justify-content:center
+      display:flex;align-items:center;justify-content:center;
     }
     img{max-width:100%;max-height:100%;object-fit:contain}
   </style>
 </head>
 <body>
-
-  <img id="webcam" alt="Webcam Spiaggia di Amantea">
+  <img id="webcam" alt="Webcam Spiaggia di Amantea" />
 
   <script>
-    const WORKER_URL = "https://amantea-webcam.agn19278.workers.dev/"; // nuovo endpoint
-    const REFRESH_MS = 60_000;                                         // 60 s
+    // Endpoint del Worker che fornisce il JPEG live
+    const WORKER_BASE = "https://amantea-webcam.agn19278.workers.dev";
+    const JPEG_PATH   = "/snapshot.jpg";   // rotta che restituisce solo l'immagine
+    const REFRESH_MS  = 60_000;             // intervallo di aggiornamento (60 s)
 
-    function update(){
-      document.getElementById("webcam").src = WORKER_URL + "?ts=" + Date.now();
+    function update() {
+      // Bust anti‑cache: basta un timestamp in query‑string
+      const ts = Date.now();
+      document.getElementById("webcam").src = `${WORKER_BASE}${JPEG_PATH}?t=${ts}`;
     }
-    update();                       // prima volta subito
-    setInterval(update, REFRESH_MS); // poi ogni 60 s
-  </script>
 
+    // Prima immagine subito, poi ciclico
+    update();
+    setInterval(update, REFRESH_MS);
+  </script>
 </body>
 </html>
