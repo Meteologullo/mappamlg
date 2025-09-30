@@ -3775,8 +3775,10 @@ window.KNOWN = Array.isArray(window.KNOWN) ? window.KNOWN : [];
       var opened = false;
       function go(ev){
         try{
-          // Apri in nuova scheda senza bloccare il thread UI
-          window.open(URL, "_blank", "noopener");
+          try{ showToast(wrap || document.querySelector('header.mlg-banner .mlg-search') || document.body); }catch(_ ){}
+          var newTab = null;
+          try{ newTab = window.open('', '_blank', 'noopener'); }catch(_e){ newTab = null; }
+          setTimeout(function(){ try{ if(newTab) newTab.location.href = URL; else window.open(URL, '_blank', 'noopener'); }catch(_e){} }, 350);
           opened = true;
           if(ev && ev.preventDefault) ev.preventDefault();
           // Evita che la tastiera/apertura focus sovrascriva l'esperienza
@@ -3798,6 +3800,91 @@ window.KNOWN = Array.isArray(window.KNOWN) ? window.KNOWN : [];
   }
 })();
 </script>
+<script id="mlg-search-overlay-link-2025-09-30">
+(function(){
+  try{
+    var inp = document.getElementById("cityInput") || document.querySelector("header.mlg-banner .mlg-search input");
+    if(!inp || inp.__mlgOverlayBound) return;
+    var wrap = inp.parentElement;
+    if(wrap){ 
+      var style = getComputedStyle(wrap);
+      if(style.position === 'static'){ wrap.style.position = 'relative'; }
+      var a = document.createElement('a'); a.id = 'mlgSearchOverlayLink';
+      a.href = 'https://www.meteologullo.com/';
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.setAttribute('aria-label','Apri meteologullo.com in nuova scheda');
+      a.style.cssText = 'position:absolute;inset:0;border-radius:999px;z-index:5;';
+      wrap.appendChild(a);
+    }
+    inp.__mlgOverlayBound = true;
+  }catch(_){}
+})();
+</script>
+<style id="mlg-search-toast-css-2025-09-30">
+#mlgToast{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);margin:auto;width:min(620px,96%);max-width:96%;background:rgba(0,0,0,.85);color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:12px 14px;box-shadow:0 6px 32px rgba(0,0,0,.5);font-size:14px;line-height:1.35;z-index:9}
+#mlgToast strong{display:block;font-size:15px;margin-bottom:4px}
+@media (max-width:560px){ #mlgToast{font-size:13px; padding:10px 12px} #mlgToast strong{font-size:14px} }
+</style>
+<script id="mlg-search-toast-js-2025-09-30">
+(function(){
+  function showToast(wrap){
+    try{
+      if(!wrap) return;
+      // remove existing
+      var old = wrap.querySelector('#mlgToast'); if(old) old.remove();
+      var box = document.createElement('div');
+      box.id = 'mlgToast';
+      box.setAttribute('role','status');
+      box.innerHTML = '<strong>Un attimo…</strong> ti stiamo reindirizzando alla <em>sezione Previsioni</em>, dove potrai scrivere la tua località e cercare la previsione. Ci scusiamo per la brevissima attesa.';
+      // Ensure wrap is positioned
+      var cs = getComputedStyle(wrap); if(cs.position === 'static'){ wrap.style.position = 'relative'; }
+      wrap.appendChild(box);
+      setTimeout(function(){ try{ box.remove(); }catch(_){} }, 1800);
+    }catch(_){}
+  }
+  // bind on overlay anchor click to show message (we don't block navigation)
+  try{
+    var wrap = document.querySelector('header.mlg-banner .mlg-search');
+    if(wrap){
+      var overlay = wrap.querySelector('a[href^="https://www.meteologullo.com"]');
+      if(overlay && !overlay.__mlgToastBound){
+        overlay.addEventListener('pointerdown', function(){ showToast(wrap); }, {passive:true});
+        overlay.addEventListener('click', function(){ showToast(wrap); }, {passive:true});
+    overlay.__mlgToastBound = true;
+  }
+}catch(_){}
+
+    // Fallback: if overlay not found, bind on the actual input
+    try{
+      var inp = document.querySelector("header.mlg-banner .mlg-search input");
+      if(inp && !inp.__mlgToastFallback){
+        inp.addEventListener('pointerdown', function(){
+          var wrap2 = document.querySelector('header.mlg-banner .mlg-search');
+          showToast(wrap2 || document.body);
+          // open after a tiny delay to let the toast render at least one frame
+          (function(){
+      var nt=null;try{ nt = window.open('', '_blank', 'noopener'); }catch(_e){ nt=null; }
+      setTimeout(function(){ try{ if(nt) nt.location.href = 'https://www.meteologullo.com/'; else window.open('https://www.meteologullo.com/', '_blank', 'noopener'); }catch(_e){} }, 350);
+    })();
+    }, {passive:true});
+        inp.addEventListener('keydown', function(ev){
+          if(ev.key === 'Enter'){
+            var wrap2 = document.querySelector('header.mlg-banner .mlg-search');
+            showToast(wrap2 || document.body);
+            (function(){
+      var nt=null;try{ nt = window.open('', '_blank', 'noopener'); }catch(_e){ nt=null; }
+      setTimeout(function(){ try{ if(nt) nt.location.href = 'https://www.meteologullo.com/'; else window.open('https://www.meteologullo.com/', '_blank', 'noopener'); }catch(_e){} }, 350);
+    })();
+    }
+        }, {passive:true});
+        inp.__mlgToastFallback = true;
+      }
+    }catch(_){}
+    
+</script>
+
+
 </form>
 
     <!-- Hamburger toggle (mobile) --><!-- Desktop nav (kept for large screens) -->
@@ -3807,7 +3894,7 @@ window.KNOWN = Array.isArray(window.KNOWN) ? window.KNOWN : [];
       <a class="mlg-pill" href="https://www.meteologullo.com/blank" data-key="chi-siamo">Chi Siamo</a>
       <a class="mlg-pill" href="https://www.meteologullo.com/blog/categories/meteo-curiosit%C3%A0" data-key="curiosita">Curiosità</a>
       <a class="mlg-pill" href="https://www.meteologullo.com/webcam" data-key="webcam">Webcam</a>
-</nav>
+    </nav>
   </div>
 
   <!-- Dropdown menu (mobile) --></div>
@@ -4437,8 +4524,83 @@ function buildNav(){
     const btn=document.createElement('button');btn.type='button';
     btn.textContent=d.label;
     if(i===curDay) btn.classList.add('active');
-    btn.addEventListener('click',()=>{const __wasNight = night;if(__wasNight){ night=false; }curDay=i;updateNav();render();if(__wasNight){ night=true; }document.body.classList.toggle('night', night);$('#themeBtn').textContent = night ? '☀️' : '🌙';});
-    frag.appendChild(btn);
+    
+
+
+btn.addEventListener('click', (ev)=>{
+  try{
+    ev.preventDefault();
+    const raw = (links || []);
+    const list = [];
+    const seen = new Set();
+    const norm = s => String(s||'').trim().toLowerCase();
+    const isHomeHref = href => /^https?:\/\/(www\.)?meteologullo\.com\/?$/.test(String(href||''));
+    // collect & dedupe
+    raw.forEach(it => {
+      const href = (it.tagName ? it.getAttribute('href') : it.h) || '#';
+      const label = (it.tagName ? it.textContent : it.t) || href;
+      const key = norm(label) + '|' + norm(href.replace(/\/+$/,''));
+      if(!seen.has(key)){
+        seen.add(key);
+        list.push({text: label.trim(), href});
+      }
+    });
+    // ensure single Home
+    let homeIndex = list.findIndex(x => norm(x.text) === 'home' || isHomeHref(x.href));
+    if(homeIndex === -1){
+      list.unshift({text:'Home', href:'https://www.meteologullo.com/'});
+      homeIndex = 0;
+    }else{
+      // normalize and move to top
+      list[homeIndex].text = 'Home';
+      list[homeIndex].href = 'https://www.meteologullo.com/';
+      const h = list.splice(homeIndex,1)[0];
+      list.unshift(h);
+    }
+    // remove any other items that look like Home
+    for(let i=list.length-1;i>0;i--){
+      if(norm(list[i].text) === 'home' || isHomeHref(list[i].href)){
+        list.splice(i,1);
+      }
+    }
+    const items = list.map(it => `<a class="item" href="${it.href}" target="_blank" rel="noopener">${it.text}</a>`).join('');
+    const html = `<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Menu MLG</title>
+    <style>:root{--bg:#0c1118;--fg:#e6edf3;--card:#121826}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}.wrap{max-width:820px;margin:18px auto;padding:16px}h1{font-size:28px;margin:0 0 10px 0}.grid{display:grid;gap:12px}a.item{display:block;padding:18px 20px;border-radius:16px;background:var(--card);text-decoration:none;border:1px solid rgba(255,255,255,.08)}</style>
+    </head><body><div class="wrap"><h1>Menu MLG</h1><div class="grid">${items}</div></div></body></html>`;
+    const blob = new Blob([html],{type:'text/html'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel='noopener'; a.style.display='none'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 3000);
+  }catch(_){}
+});
+}
+    });
+    // Normalize Home -> single, on top, correct href
+    const idxHome = list.findIndex(x => norm(x.text) === 'home');
+    if(idxHome >= 0){
+      list[idxHome].text = 'Home';
+      list[idxHome].href = 'https://www.meteologullo.com/';
+      // move to top
+      const h = list.splice(idxHome,1)[0];
+      list.unshift(h);
+      // Remove any other items that point to same href or same label
+      for(let i=list.length-1;i>0;i--){
+        if(norm(list[i].text) === 'home' || norm(list[i].href) === norm('https://www.meteologullo.com/')){
+          list.splice(i,1);
+        }
+      }
+    }else{
+      list.unshift({text:'Home', href:'https://www.meteologullo.com/'});
+    }
+    const items = list.map(it => `<a class="item" href="${it.href}" target="_blank" rel="noopener">${it.text}</a>`).join('');
+    const html = `<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Menu MLG</title>
+    <style>:root{--bg:#0c1118;--fg:#e6edf3;--card:#121826}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}.wrap{max-width:820px;margin:18px auto;padding:16px}h1{font-size:28px;margin:0 0 10px 0}.grid{display:grid;gap:12px}a.item{display:block;padding:18px 20px;border-radius:16px;background:var(--card);text-decoration:none;border:1px solid rgba(255,255,255,.08)}</style>
+    </head><body><div class="wrap"><h1>Menu MLG</h1><div class="grid">${items}</div></div></body></html>`;
+    const blob = new Blob([html],{type:'text/html'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel='noopener'; a.style.display='none'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 3000);
+  }catch(_){}
+});
+frag.appendChild(btn);
   });
   nav.appendChild(frag);
 }
@@ -20637,96 +20799,96 @@ try{
   }
 </style>
 
-<script id="mlg-compact-topbar-js-2025-10-01">
+<script id="mlg-compact-topbar-js-2025-09-29">
 (function(){
-  function onReady(fn){ (document.readyState==='loading') ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn(); }
+  const onReady = (fn)=> (document.readyState === 'loading') ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn();
+
   onReady(function(){
     const header = document.querySelector('header.mlg-banner .mlg-inner');
     if(!header) return;
+
     const nav = header.querySelector('.mlg-nav');
     const search = header.querySelector('.mlg-search');
     const title = header.querySelector('.mlg-title');
 
-    // 1) Ensure hamburger button exists at the far left
-    let btn = document.getElementById('mlgMenuBtn');
-    if(!btn){
-      btn = document.createElement('button');
-      btn.id='mlgMenuBtn';
-      btn.type='button';
-      btn.setAttribute('aria-haspopup','menu');
-      btn.setAttribute('aria-expanded','false');
-      btn.setAttribute('title','Apri menu');
-      btn.innerHTML='<span class="mlg-hb" aria-hidden="true"><b></b><b></b><b></b></span>';
-      header.insertBefore(btn, header.firstChild);
-    }
+    /* 1) Create the hamburger button */
+    const btn = document.createElement('button');
+    btn.id = 'mlgMenuBtn';
+    btn.type = 'button';
+    btn.setAttribute('aria-haspopup','menu');
+    btn.setAttribute('aria-expanded','false');
+    btn.setAttribute('title','Apri menu');
+    btn.innerHTML = '<span class="mlg-hb" aria-hidden="true"><b></b><b></b><b></b></span>';
+    header.insertBefore(btn, header.firstChild);
 
-    // 2) Compact the title if present
+    /* 2) Convert title to compact brand "MLG" and place after button */
     if(title){
-      title.querySelector('span') && (title.querySelector('span').textContent = 'MLG');
-      title.style.order='1';
+      title.querySelectorAll('.mlg-dot').forEach(el=>el.remove());
+      title.textContent = 'MLG';
+      header.insertBefore(title, search);
     }
 
-    // 3) Click -> open small popup window containing the menu links
-    function buildMenuHTML(){
-      // collect links from nav or fallback
-      let links = [];
-      if(nav){
-        nav.querySelectorAll('a').forEach(a=>{
-          links.push({t:a.textContent.trim(), h:a.getAttribute('href')});
-        });
-      }else{
-        links = [
-          {t:'Home', h:'https://www.meteologullo.com/'},
-          {t:'MLG Map', h:'https://www.meteologullo.com/stazioni-meteorologiche-mlg'},
-          {t:'News', h:'https://www.meteologullo.com/blog'},
-          {t:'Chi Siamo', h:'https://www.meteologullo.com/blank'},
-          {t:'Curiosità', h:'https://www.meteologullo.com/blog/categories/meteo-curiosit%C3%A0'},
-          {t:'Webcam', h:'https://www.meteologullo.com/webcam'}
-        ];
-      }
-      // build html
-      const items = links.map(l => '<li><a target="_blank" rel="noopener" href="'+l.h+'">'+l.t+'</a></li>').join('');
-      const html = `<!doctype html><html lang="it"><head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>Menu • Meteo Gullo</title>
-        <style>
-          :root{--bg:#0b1220;--fg:#e3e8ef;--muted:#94a3b8;--accent:#2563eb;}
-          html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;}
-          header{padding:12px 16px;border-bottom:1px solid #1f2937;display:flex;justify-content:space-between;align-items:center}
-          h1{font-size:16px;margin:0}
-          button{background:#111827;border:1px solid #1f2937;color:var(--fg);border-radius:10px;padding:6px 10px;cursor:pointer}
-          ul{list-style:none;margin:0;padding:10px 12px;display:grid;gap:8px}
-          a{display:block;padding:10px 12px;border-radius:12px;text-decoration:none;color:var(--fg);background:#111827;border:1px solid #1f2937}
-          a:hover{border-color:var(--accent)}
-          footer{padding:10px 12px;color:var(--muted);font-size:12px}
-        </style></head><body>
-        <header><h1>Menu</h1><button onclick="window.close()">Chiudi</button></header>
-        <ul>${items}</ul>
-        <footer>Le voci si aprono in una nuova scheda.</footer>
-      </body></html>`;
-      return html;
+    /* 3) Build dropdown panel using the existing links (then remove the old row) */
+    const panel = document.createElement('div');
+    panel.id = 'mlgMenuPanel';
+    let links = [];
+    if(nav){
+      links = Array.from(nav.querySelectorAll('a')).map(a=>{
+        const c = a.cloneNode(true);
+        c.className = ''; // clean pill style; we give new style in CSS
+        return c;
+      });
+      nav.remove(); // sparire
+    }else{
+      // fallback in case there is no .mlg-nav already in DOM
+      links = [
+        {t:'Home',h:'https://www.meteologullo.com/'},
+        {t:'MLG Map',h:'https://www.meteologullo.com/stazioni-meteorologiche-mlg'},
+        {t:'News',h:'https://www.meteologullo.com/blog'},
+        {t:'Chi Siamo',h:'https://www.meteologullo.com/blank'},
+        {t:'Curiosità',h:'https://www.meteologullo.com/blog/categories/meteo-curiosit%C3%A0'},
+        {t:'Webcam',h:'https://www.meteologullo.com/webcam'}
+      ].map(o=>{ const a = document.createElement('a'); a.textContent = o.t; a.href = o.h; a.target = '_blank'; a.rel='noopener'; return a; });
     }
+    links.forEach(a=>{ if(a.tagName){ a.target='_blank'; a.rel='noopener'; } panel.appendChild(a); });
+    document.body.appendChild(panel);
 
-    function openPopup(){
-      // Open centered window
-      const w = 360, h = 520;
-      const y = (window.top.outerHeight - h) / 2 + (window.top.screenY||0);
-      const x = (window.top.outerWidth - w) / 2 + (window.top.screenX||0);
-      const win = window.open('', 'mlgMenuWin', `popup=yes,width=${w},height=${h},left=${x},top=${y},resizable=yes`);
-      if(!win) return; // popup blocked
-      win.document.open();
-      win.document.write(buildMenuHTML());
-      win.document.close();
-      try{ win.focus(); }catch(_){}
-    }
-
-    btn.addEventListener('click', function(){
-      openPopup();
+    /* 4) Toggle logic */
+    function closeMenu(){ panel.classList.remove('open'); btn.setAttribute('aria-expanded','false'); }
+    function openMenu(){ panel.classList.add('open'); btn.setAttribute('aria-expanded','true'); }
+    btn.addEventListener('click', (ev)=>{
+      try{
+        ev.preventDefault();
+        // Build cross-device menu page that opens in a NEW TAB (no popup)
+        const items = (links || []).map(it => {
+          const href = (it.tagName ? it.getAttribute('href') : it.h) || '#';
+          const label = (it.tagName ? it.textContent : it.t) || href;
+          return `<a class="item" href="${href}" target="_blank" rel="noopener">${label}</a>`;
+        }).join('');
+        const html = `<!DOCTYPE html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Menu MLG</title>
+        <style>:root{--bg:#0c1118;--fg:#e6edf3;--card:#121826}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}.wrap{max-width:820px;margin:18px auto;padding:16px}h1{font-size:28px;margin:0 0 10px 0}.grid{display:grid;gap:12px}a.item{display:block;padding:18px 20px;border-radius:16px;background:var(--card);text-decoration:none;border:1px solid rgba(255,255,255,.08)}</style>
+        </head><body><div class="wrap"><h1>Menu MLG</h1><div class="grid">
+        ${items}
+        </div></div></body></html>`;
+        const blob = new Blob([html],{type:'text/html'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel='noopener'; a.style.display='none'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 3000);
+      }catch(_){}
+    });
+document.addEventListener('click', (e)=>{
+      if(!panel.classList.contains('open')) return;
+      if(e.target === btn || btn.contains(e.target)) return;
+      if(panel.contains(e.target)) return;
+      closeMenu();
+    }, {passive:true});
+    document.addEventListener('keydown', (e)=>{
+      if(e.key === 'Escape') closeMenu();
     });
 
-    // 4) Keep search last
-    if(search){ search.style.order='3'; }
+    /* 5) Make sure search stays last and flexes */
+    if(search){
+      search.style.order = '3';
+    }
   });
 })();
 </script>
