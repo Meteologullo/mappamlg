@@ -3801,13 +3801,12 @@ window.KNOWN = Array.isArray(window.KNOWN) ? window.KNOWN : [];
 </form>
 
     <!-- Hamburger toggle (mobile) --><!-- Desktop nav (kept for large screens) -->
-    <nav class="mlg-nav" aria-label="Sezioni principali">
-      <a class="mlg-pill" href="https://www.meteologullo.com/" data-key="home">Home</a>
+    <nav class="mlg-nav" aria-label="Sezioni principali"><a class="mlg-pill" href="https://www.meteologullo.com/" data-key="home">Home</a>
       <a class="mlg-pill" href="https://www.meteologullo.com/stazioni-meteorologiche-mlg" data-key="mlgmap">MLG Map</a>
       <a class="mlg-pill" href="https://www.meteologullo.com/blog" data-key="news">News</a>
       <a class="mlg-pill" href="https://www.meteologullo.com/blank" data-key="chi-siamo">Chi Siamo</a>
       <a class="mlg-pill" href="https://www.meteologullo.com/blog/categories/meteo-curiosit%C3%A0" data-key="curiosita">Curiosità</a>
-          <a class="mlg-pill" href="https://www.meteologullo.com/webcam" data-key="webcam">Webcam</a>
+      <a class="mlg-pill" href="https://www.meteologullo.com/webcam" data-key="webcam">Webcam</a>
 </nav>
   </div>
 
@@ -20638,81 +20637,96 @@ try{
   }
 </style>
 
-<script id="mlg-compact-topbar-js-2025-09-29">
+<script id="mlg-compact-topbar-js-2025-10-01">
 (function(){
-  const onReady = (fn)=> (document.readyState === 'loading') ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn();
-
+  function onReady(fn){ (document.readyState==='loading') ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn(); }
   onReady(function(){
     const header = document.querySelector('header.mlg-banner .mlg-inner');
     if(!header) return;
-
     const nav = header.querySelector('.mlg-nav');
     const search = header.querySelector('.mlg-search');
     const title = header.querySelector('.mlg-title');
 
-    /* 1) Create the hamburger button */
-    const btn = document.createElement('button');
-    btn.id = 'mlgMenuBtn';
-    btn.type = 'button';
-    btn.setAttribute('aria-haspopup','menu');
-    btn.setAttribute('aria-expanded','false');
-    btn.setAttribute('title','Apri menu');
-    btn.innerHTML = '<span class="mlg-hb" aria-hidden="true"><b></b><b></b><b></b></span>';
-    header.insertBefore(btn, header.firstChild);
+    // 1) Ensure hamburger button exists at the far left
+    let btn = document.getElementById('mlgMenuBtn');
+    if(!btn){
+      btn = document.createElement('button');
+      btn.id='mlgMenuBtn';
+      btn.type='button';
+      btn.setAttribute('aria-haspopup','menu');
+      btn.setAttribute('aria-expanded','false');
+      btn.setAttribute('title','Apri menu');
+      btn.innerHTML='<span class="mlg-hb" aria-hidden="true"><b></b><b></b><b></b></span>';
+      header.insertBefore(btn, header.firstChild);
+    }
 
-    /* 2) Convert title to compact brand "MLG" and place after button */
+    // 2) Compact the title if present
     if(title){
-      title.querySelectorAll('.mlg-dot').forEach(el=>el.remove());
-      title.textContent = 'MLG';
-      header.insertBefore(title, search);
+      title.querySelector('span') && (title.querySelector('span').textContent = 'MLG');
+      title.style.order='1';
     }
 
-    /* 3) Build dropdown panel using the existing links (then remove the old row) */
-    const panel = document.createElement('div');
-    panel.id = 'mlgMenuPanel';
-    let links = [];
-    if(nav){
-      links = Array.from(nav.querySelectorAll('a')).map(a=>{
-        const c = a.cloneNode(true);
-        c.className = ''; // clean pill style; we give new style in CSS
-        return c;
-      });
-      nav.remove(); // sparire
-    }else{
-      // fallback in case there is no .mlg-nav already in DOM
-      links = [
-        {t:'Home',h:'https://www.meteologullo.com/'},
-        {t:'MLG Map',h:'https://www.meteologullo.com/stazioni-meteorologiche-mlg'},
-        {t:'News',h:'https://www.meteologullo.com/blog'},
-        {t:'Chi Siamo',h:'https://www.meteologullo.com/blank'},
-        {t:'Curiosità',h:'https://www.meteologullo.com/blog/categories/meteo-curiosit%C3%A0'}
-      ,
-        {t:'Webcam',h:'https://www.meteologullo.com/webcam'}
-      ].map(o=>{ const a = document.createElement('a'); a.textContent = o.t; a.href = o.h; a.target = '_blank'; a.rel='noopener'; return a; });
+    // 3) Click -> open small popup window containing the menu links
+    function buildMenuHTML(){
+      // collect links from nav or fallback
+      let links = [];
+      if(nav){
+        nav.querySelectorAll('a').forEach(a=>{
+          links.push({t:a.textContent.trim(), h:a.getAttribute('href')});
+        });
+      }else{
+        links = [
+          {t:'Home', h:'https://www.meteologullo.com/'},
+          {t:'MLG Map', h:'https://www.meteologullo.com/stazioni-meteorologiche-mlg'},
+          {t:'News', h:'https://www.meteologullo.com/blog'},
+          {t:'Chi Siamo', h:'https://www.meteologullo.com/blank'},
+          {t:'Curiosità', h:'https://www.meteologullo.com/blog/categories/meteo-curiosit%C3%A0'},
+          {t:'Webcam', h:'https://www.meteologullo.com/webcam'}
+        ];
+      }
+      // build html
+      const items = links.map(l => '<li><a target="_blank" rel="noopener" href="'+l.h+'">'+l.t+'</a></li>').join('');
+      const html = `<!doctype html><html lang="it"><head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Menu • Meteo Gullo</title>
+        <style>
+          :root{--bg:#0b1220;--fg:#e3e8ef;--muted:#94a3b8;--accent:#2563eb;}
+          html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;}
+          header{padding:12px 16px;border-bottom:1px solid #1f2937;display:flex;justify-content:space-between;align-items:center}
+          h1{font-size:16px;margin:0}
+          button{background:#111827;border:1px solid #1f2937;color:var(--fg);border-radius:10px;padding:6px 10px;cursor:pointer}
+          ul{list-style:none;margin:0;padding:10px 12px;display:grid;gap:8px}
+          a{display:block;padding:10px 12px;border-radius:12px;text-decoration:none;color:var(--fg);background:#111827;border:1px solid #1f2937}
+          a:hover{border-color:var(--accent)}
+          footer{padding:10px 12px;color:var(--muted);font-size:12px}
+        </style></head><body>
+        <header><h1>Menu</h1><button onclick="window.close()">Chiudi</button></header>
+        <ul>${items}</ul>
+        <footer>Le voci si aprono in una nuova scheda.</footer>
+      </body></html>`;
+      return html;
     }
-    links.forEach(a=>panel.appendChild(a));
-    document.body.appendChild(panel);
-    panel.querySelectorAll('a').forEach(a=>{ a.setAttribute('target','_blank'); a.setAttribute('rel','noopener'); });
 
+    function openPopup(){
+      // Open centered window
+      const w = 360, h = 520;
+      const y = (window.top.outerHeight - h) / 2 + (window.top.screenY||0);
+      const x = (window.top.outerWidth - w) / 2 + (window.top.screenX||0);
+      const win = window.open('', 'mlgMenuWin', `popup=yes,width=${w},height=${h},left=${x},top=${y},resizable=yes`);
+      if(!win) return; // popup blocked
+      win.document.open();
+      win.document.write(buildMenuHTML());
+      win.document.close();
+      try{ win.focus(); }catch(_){}
+    }
 
-    /* 4) Toggle logic */
-    function closeMenu(){ panel.classList.remove('open'); btn.setAttribute('aria-expanded','false'); }
-    function openMenu(){ panel.classList.add('open'); btn.setAttribute('aria-expanded','true'); }
-    btn.addEventListener('click', ()=> panel.classList.contains('open') ? closeMenu() : openMenu());
-    document.addEventListener('click', (e)=>{
-      if(!panel.classList.contains('open')) return;
-      if(e.target === btn || btn.contains(e.target)) return;
-      if(panel.contains(e.target)) return;
-      closeMenu();
-    }, {passive:true});
-    document.addEventListener('keydown', (e)=>{
-      if(e.key === 'Escape') closeMenu();
+    btn.addEventListener('click', function(){
+      openPopup();
     });
 
-    /* 5) Make sure search stays last and flexes */
-    if(search){
-      search.style.order = '3';
-    }
+    // 4) Keep search last
+    if(search){ search.style.order='3'; }
   });
 })();
 </script>
