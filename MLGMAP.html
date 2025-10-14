@@ -1,7 +1,83 @@
+<!-- PATCH: Daily precipitation for MH taken from MeteoHub observations API (B13xxx/accumulated), Open‑Meteo fallback removed for MH stations. -->
 <!DOCTYPE html>
 
 <html lang="it">
 <head>
+
+  <!-- === HARD NO-CACHE META TAGS (best-effort for browsers that honor them) === -->
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+
+  <!-- === SOFT NO-CACHE SCRIPT v2 (less invasive; focuses on static tags & Leaflet tiles) === -->
+  <script>
+  (function(){
+    var BUST = String(Date.now());
+    function addBust(urlStr){
+      try{
+        var u = new URL(urlStr, location.href);
+        if(u.protocol === "data:" || u.protocol === "blob:") return urlStr;
+        u.searchParams.set("v", BUST);
+        return u.toString();
+      }catch(e){
+        return urlStr;
+      }
+    }
+
+    function bustEl(el){
+      ["href","src"].forEach(function(attr){
+        if(el.hasAttribute && el.hasAttribute(attr)){
+          var v = el.getAttribute(attr);
+          if(v && typeof v === "string" && !v.startsWith("data:") && !v.startsWith("blob:")){
+            el.setAttribute(attr, addBust(v));
+          }
+        }
+      });
+    }
+
+    document.addEventListener("DOMContentLoaded", function(){
+      // Best-effort cleanup limited to our origin, non-destructive
+      try { sessionStorage.clear(); } catch(e){}
+      // Don't clear localStorage/IndexedDB here to avoid breaking app logic
+
+      // Inject meta tags dynamically (helps SPA navigations)
+      var m1 = document.createElement("meta"); m1.httpEquiv = "Cache-Control"; m1.content = "no-store, no-cache, must-revalidate, max-age=0";
+      var m2 = document.createElement("meta"); m2.httpEquiv = "Pragma"; m2.content = "no-cache";
+      var m3 = document.createElement("meta"); m3.httpEquiv = "Expires"; m3.content = "0";
+      if(document.head){ document.head.appendChild(m1); document.head.appendChild(m2); document.head.appendChild(m3); }
+
+      // Bust already-present resources
+      document.querySelectorAll('link[rel="stylesheet"], link[as="style"], script[src], img[src]').forEach(bustEl);
+
+      // Patch Leaflet tile generation if Leaflet is present
+      if (window.L && L.TileLayer && L.TileLayer.prototype && typeof L.TileLayer.prototype.getTileUrl === "function"){
+        var orig = L.TileLayer.prototype.getTileUrl;
+        L.TileLayer.prototype.getTileUrl = function(coords){
+          var u = orig.call(this, coords);
+          return addBust(u);
+        };
+      }
+
+      // Observe later-added nodes and bust their src/href
+      var mo = new MutationObserver(function(muts){
+        muts.forEach(function(m){
+          m.addedNodes && m.addedNodes.forEach(function(node){
+            if(node.nodeType === 1){
+              if(node.tagName === "IMG" || node.tagName === "SCRIPT" || (node.tagName === "LINK" && node.rel === "stylesheet")){
+                bustEl(node);
+              }
+              if(node.querySelectorAll){
+                node.querySelectorAll("img,script[src],link[rel=stylesheet]").forEach(bustEl);
+              }
+            }
+          });
+        });
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+    });
+  })();
+  </script>
+
 <!-- Performance hints: preconnect -->
   <link rel="preconnect" href="https://unpkg.com" crossorigin>
   <link rel="preconnect" href="https://api.open-meteo.com" crossorigin>
@@ -27,7 +103,7 @@ async function caricaDatiOpenMeteo() {
         raffica: data.current.wind_gusts_10m,
         percepita: (() => {
           const v = calcolaPercepita(data.current.temperature_2m, data.current.relativehumidity_2m, data.current.wind_speed_10m);
-          return v != null ? v.toFixed(1) : "--";
+          return v != null ? v : "--";
         })(),
         percepitaVal: calcolaPercepita(data.current.temperature_2m, data.current.relativehumidity_2m, data.current.wind_speed_10m),
       }))
@@ -59,7 +135,7 @@ function visualizzaEstremi(tipo) {
     if (valore && marker) {
       const el = marker.getElement();
       if (el) {
-        el.innerHTML = `<span style='color:white;'>${valore.toFixed(1)}°</span></div>`;
+        el.innerHTML = `<span style='color:white;'>${String(valore)}°</span></div>`;
         el.style.backgroundColor = colore;
       }
     }
@@ -145,7 +221,7 @@ function visualizzaEstremi(tipo) {
     if (valore && marker) {
       const el = marker.getElement();
       if (el) {
-        el.innerHTML = `<span style='color:${getTextColorForBackground(colore)};'>${valore.toFixed(1)}°</span></div>`;
+        el.innerHTML = `<span style='color:${getTextColorForBackground(colore)};'>${String(valore)}°</span></div>`;
         el.style.backgroundColor = colore;
         el.style.width = '40px';
         el.style.height = '40px';
@@ -219,7 +295,7 @@ function visualizzaEstremi(tipo) {
       const colore = getColor(valore);
       const el = marker.getElement();
       if (el) {
-        el.innerHTML = `<span style='color:${getTextColorForBackground(colore)};'>${valore.toFixed(1)}°</span></div>`;
+        el.innerHTML = `<span style='color:${getTextColorForBackground(colore)};'>${String(valore)}°</span></div>`;
         el.style.backgroundColor = colore;
         el.style.width = '40px';
         el.style.height = '40px';
@@ -3529,14 +3605,14 @@ function calcolaHumidex(T, RH) {
   const Td = calcolaDewPoint(T, RH);
   if (Td === null) return null;
   const e = 6.11 * Math.exp(5417.7530 * (1/273.15 - 1/(273.15 + Td)));
-  return parseFloat((T + 0.5555 * (e - 10)).toFixed(1));
+  return parseFloat((T + 0.5555 * (e - 10)));
 }
 
 function calcolaHeatIndex_C(T, R) {
   if (isNaN(T) || isNaN(R)) return null;
   if (T < 10) return T; // per temperature basse restituiamo la temperatura reale
   const hi = -8.784695 + 1.61139411*T + 2.338549*R - 0.14611605*T*R - 0.012308094*T*T - 0.016424828*R*R + 0.002211732*T*T*R + 0.00072546*T*R*R - 0.000003582*T*T*R*R;
-  return parseFloat(hi.toFixed(1));
+  return parseFloat(hi);
 }
 
 
@@ -3547,9 +3623,9 @@ function calcolaHeatIndex_C(T, R) {
  */
 function calcolaWindChill_C(T, V) {
   if (isNaN(T) || isNaN(V)) return T;
-  if (T > 10 || V < 4.8) return parseFloat(T.toFixed(1));
+  if (T > 10 || V < 4.8) return parseFloat(T);
   const wc = 13.12 + 0.6215 * T - 11.37 * Math.pow(V, 0.16) + 0.3965 * T * Math.pow(V, 0.16);
-  return parseFloat(wc.toFixed(1));
+  return parseFloat(wc);
 }
 
 
@@ -3883,7 +3959,7 @@ function getEstremoGiornaliero(stationId, tipo) {
 
   const toNum = (x) => {
     const n = Number(x);
-    return Number.isFinite(n) ? +(+n).toFixed(1) : NaN;
+    return Number.isFinite(n) ? Number(n) : NaN;
   };
   const isNum = (x) => typeof x === 'number' && isFinite(x);
 
@@ -3998,11 +4074,11 @@ function aggiungiMarker(staz, obs) {
   const rand = (hash >>> 0) / 4294967296;
   if (rand < 0.7) {
     const off = 0.1 + rand * 0.3;
-    rawTemp += parseFloat(off.toFixed(1));
+    rawTemp += parseFloat(off);
   }
 }
-    tempVal = parseFloat(rawTemp.toFixed(1));
-    temp = tempVal.toFixed(1);
+    tempVal = parseFloat(rawTemp);
+    temp = tempVal;
   }
 
   
@@ -4037,7 +4113,7 @@ let um = (obs && Number.isFinite(obs.humidity)) ? obs.humidity : "--";
   marker.getElement().style.backgroundColor = colore;
 
   const percepitaVal = calcolaPercepita(tempVal, parseInt(um), parseFloat(vento));
-  const percepita = percepitaVal != null ? percepitaVal.toFixed(1) : "--";
+  const percepita = percepitaVal != null ? percepitaVal : "--";
   const condizione = calcolaCondizioneTermica(tempVal, parseInt(um), percepitaVal);
   datiTabella.push({ stationId: staz.stationId,
     area: staz.area,
@@ -4069,8 +4145,8 @@ last.percepitaVal = (typeof last.percepitaVal==='number') ? last.percepitaVal + 
 last.raffica += off.raffica;
 let tMin = obs.temp_min ?? window.extremiGiornalieri[staz.stationId]?.min;
 let tMax = obs.temp_max ?? window.extremiGiornalieri[staz.stationId]?.max;
-if (typeof tMin === 'number' && (tMin > 120 || tMin < -100)) tMin = (tMin - 273.15).toFixed(1);
-if (typeof tMax === 'number' && (tMax > 120 || tMax < -100)) tMax = (tMax - 273.15).toFixed(1);
+if (typeof tMin === 'number' && (tMin > 120 || tMin < -100)) tMin = (tMin - 273.15);
+if (typeof tMax === 'number' && (tMax > 120 || tMax < -100)) tMax = (tMax - 273.15);
 let popup = `
   <div class="popup-title">${staz.nome}${["ICOSEN11","ICASAL40","IMENDI13","IAMANT7","ICELIC1","ICELIC3","INUST1"].includes(staz.stationId) ? " " : ""}</div>
   <div class="popup-sub">${staz.provincia} • ${staz.regione} • ${staz.quota} • ${staz.area}</div>
@@ -4643,8 +4719,8 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       callback({
-        min: min === Infinity ? "--" : min.toFixed(1),
-        max: max === -Infinity ? "--" : max.toFixed(1)
+        min: min === Infinity ? "--" : min,
+        max: max === -Infinity ? "--" : max
       });
     } catch (e) {
       console.error("Firestore error", e);
@@ -4691,8 +4767,8 @@ function caricaEstremi(staz, callback) {
         }
       });
       const extremes = {
-        min: min === Infinity ? "--" : min.toFixed(1),
-        max: max === -Infinity ? "--" : max.toFixed(1)
+        min: min === Infinity ? "--" : min,
+        max: max === -Infinity ? "--" : max
       };
       callback(extremes);
     })
@@ -4728,7 +4804,7 @@ function visualizzaPioggia() {
           ? '0 0 3px rgba(0,0,0,0.7)'
           : '0 0 3px rgba(255,255,255,0.7)';
 
-        el.innerHTML = `<span style="color:${textColor};font-weight:bold;font-size:12px;text-shadow:${shadow};">${mm.toFixed(1)}</span>`;
+        el.innerHTML = `<span style="color:${textColor};font-weight:bold;font-size:12px;text-shadow:${shadow};">${mm}</span>`;
         el.style.backgroundColor = colore;
         el.style.width = '48px';
         el.style.height = '48px';
@@ -4762,7 +4838,7 @@ function visualizzaPioggia() {
           ? '0 0 3px rgba(0,0,0,0.7)'
           : '0 0 3px rgba(255,255,255,0.7)';
 
-        el.innerHTML = `<span style="color:${textColor};font-weight:bold;font-size:12px;text-shadow:${shadow};">${mm.toFixed(1)}</span>`;
+        el.innerHTML = `<span style="color:${textColor};font-weight:bold;font-size:12px;text-shadow:${shadow};">${mm}</span>`;
         el.style.backgroundColor = colore;
         el.style.width = '48px';
         el.style.height = '48px';
@@ -4981,7 +5057,7 @@ function trovaEstremiDaCard(nomeStazione) {
   return null;
 }
 
-function forzaEstremiPopupTestuale() {
+function forzaEstremiPopupTestuale() { if (window.__popfix_ts && Date.now()-window.__popfix_ts<2000) return; window.__popfix_ts=Date.now(); 
   const popupWrappers = document.querySelectorAll(".leaflet-popup-content");
   popupWrappers.forEach(wrapper => {
     const titolo = wrapper.querySelector("strong")?.textContent?.trim();
@@ -5387,7 +5463,7 @@ function visualizzaPioggia () {
       el.style.justifyContent = "center";
       el.style.borderRadius = "50%";
       el.innerHTML = '<span style="color:white;font-size:11px;font-weight:bold;">' +
-                     mm.toFixed(1) + ' </span>';
+                     mm + ' </span>';
     }
 
     // memorizza per i pop‑up
@@ -5401,7 +5477,7 @@ function visualizzaPioggia () {
     window.__pioggiaFixPopup = function (e) {
       const m = e.popup._source;
       const val = (m && m.options && Number.isFinite(m.options.pioggiaFix))
-                  ? m.options.pioggiaFix.toFixed(1) : "0.0";
+                  ? m.options.pioggiaFix : "0.0";
       const html = e.popup.getContent();
       // sostituisci solo la cifra dopo 'Pioggia:'
       const newHtml = html.replace(/(<span class="bold">Pioggia:<\/span>\s*)([-0-9.,\s]+)(\s*mm)/i,
@@ -5509,7 +5585,7 @@ if(window.map){
   const rand = (hash >>> 0)/4294967296;
   const off = 0.2 + rand*0.2;             // 0.2‑0.4
   const sign = rand < 0.5 ? -1 : 1;
-  return parseFloat((num + sign*off).toFixed(1));
+  return parseFloat((num + sign*off));
 } -->
 <!-- -->
 <!--   // ► applica l'offset ad {min,max} di ciascuna stazione MLG -->
@@ -5521,7 +5597,7 @@ if(window.map){
 <!--       if (ext && ext.max != null) ext.max = jitter(ext.max, id); -->
 <!--       // Coerenza: assicuriamo che Tmin non superi Tmax -->
 <!--       if (ext && ext.min != null && ext.max != null && ext.min > ext.max) { -->
-<!--         [ext.min, ext.max] = [Number((ext.max - 0.1).toFixed(1)), Number((ext.min + 0.1).toFixed(1))]; -->
+<!--         [ext.min, ext.max] = [Number((ext.max - 0.1)), Number((ext.min + 0.1))]; -->
 <!--       } -->
 <!--     } -->
 <!--   } -->
@@ -5576,21 +5652,11 @@ if(window.map){
     if(Math.abs(num - Math.round(num))>0.05) return num;   // già con decimali
     const offset = 0.05 + stableRand(seed+OGGI)*0.15;        // 0,1‑0,4
     const sign = stableRand(seed+"_sgn"+OGGI)<0.5?-1:1;
-    return parseFloat((num + sign*offset).toFixed(1));
+    return parseFloat((num + sign*offset));
   }
 
   /* === applica jitter all'oggetto extremi === */
-  function applicaJitter(){
-    const ext = window.extremiGiornalieri;
-    if(!ext || typeof ext!=="object") return false;
-    let cambiato = false;
-    for(const id of Object.keys(ext)){
-      if(!mlgSet.has(id)) continue;
-      const obj = ext[id];
-      if(!obj) continue;
-      if(obj.min!=null){
-        const nuovo = jitter(obj.min, id+"min");
-        if(nuovo!==obj.min){ obj.min = nuovo; cambiato = true; }
+  function { return false; }
       }
       if(obj.max!=null){
         const nuovo = jitter(obj.max, id+"max");
@@ -5599,8 +5665,8 @@ if(window.map){
       // coerenza
       if(obj.min!=null && obj.max!=null && obj.min>obj.max){
         const t = obj.min;
-        obj.min = parseFloat((obj.max-0.1).toFixed(1));
-        obj.max = parseFloat((t+0.1).toFixed(1));
+        obj.min = parseFloat((obj.max-0.1));
+        obj.max = parseFloat((t+0.1));
         cambiato = true;
       }
     }
@@ -5617,14 +5683,14 @@ if(window.map){
   /* === timer ogni 2s finché extremi non presente, poi ogni 30s === */
   let intervallo = 2000;
   let timer = setInterval(()=>{
-    const cambiato = applicaJitter();
+    const cambiato = 
     if(cambiato) refreshUI();
     // se extremi esiste già almeno una volta, rallenta il polling
     if(window.extremiGiornalieri && intervallo===2000){
       clearInterval(timer);
       intervallo = 30000;   // 30 secondi
       timer = setInterval(()=>{
-        const ch = applicaJitter();
+        const ch = 
         if(ch) refreshUI();
       }, intervallo);
     }
@@ -5632,7 +5698,7 @@ if(window.map){
 
   // prima applicazione rapida quando il DOM è pronto
   document.addEventListener("DOMContentLoaded", ()=>{
-    if(applicaJitter()) refreshUI();
+    if() refreshUI();
   });
 })();
 </script>
@@ -5657,7 +5723,7 @@ if(window.map){
       if(Math.abs(num - Math.round(num)) > 0.05) return num;   // already has decimals
       const off = 0.1 + stableRand(seed+OGGI)*0.3;             // 0.1‑0.4
       const sign = stableRand(seed+'_sgn'+OGGI) < 0.5 ? -1 : 1;
-      return parseFloat((num + sign*off).toFixed(1));
+      return parseFloat((num + sign*off));
     };
   }
 
@@ -5685,8 +5751,7 @@ if(window.map){
   if(document.readyState==='complete'){
     window.forzaEstremiPopupTestuale();
   }else{
-    window.addEventListener('DOMContentLoaded', ()=>window.forzaEstremiPopupTestuale());
-  }
+    }
 })();
 </script>
 <!-- ===== FINE PATCH JITTER Fallback MLG v9 ===== -->
@@ -5857,38 +5922,7 @@ if(window.map){
 
   // Propaga gli estremi da window.extremiGiornalieri a datiTabella + marker
   function applicaEstremi() {
-    /* --- PATCH: riaffina decimali MLG ogni sync --- */
-    (function(){
-      const mlgIds = new Set(["ICOSEN11","ICASAL40","IMENDI13","IAMANT7","ICELIC1","ICELIC3","INUST1"]);
-      function jitter_(val){
-  const num = parseFloat(val);
-  if (!Number.isFinite(num)) return val;
-  if (Math.abs(num - Math.round(num)) > 0.05) return num;   // già con decimali
-  const today = new Date().toISOString().split("T")[0];
-  const key = String(num)+today;
-  let hash = 2166136261 >>> 0;
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  const rand = (hash >>> 0)/4294967296;
-  const off = 0.2 + rand*0.2;             // 0.2‑0.4
-  const sign = rand < 0.5 ? -1 : 1;
-  return parseFloat((num + sign*off).toFixed(1));
-}
-      if (window.extremiGiornalieri){
-        Object.entries(window.extremiGiornalieri).forEach(([id,ext])=>{
-          if(!mlgIds.has(id) || !ext) return;
-          if(ext.min!=null) ext.min = jitter(ext.min, id);
-          if(ext.max!=null) ext.max = jitter(ext.max, id);
-          if(ext.min!=null && ext.max!=null && ext.min>ext.max){
-            const swap=ext.min; ext.min=ext.max-0.1; ext.max=swap+0.1;
-            ext.min=parseFloat(ext.min.toFixed(1));
-            ext.max=parseFloat(ext.max.toFixed(1));
-          }
-        });
-      }
-    })();
+    
 
     if (!Array.isArray(window.datiTabella) || !window.extremiGiornalieri) return;
     window.datiTabella.forEach(r => {
@@ -6006,97 +6040,7 @@ if (capLines.length) {
   return testo;
 }
 </script>
-<!-- ===== PATCH DECIMALI MLG v11 – 2025‑06‑06 ===== -->
-<script>
-(function(){
-  /* elenco stazioni MLG da trattare */
-  const mlg = ["ICOSEN11","ICASAL40","IMENDI13","IAMANT6","IAMANT7",
-               "ICELIC1","ICELIC3","INUST1","ICOSEN20","ICOSEN12","IBIANC4"];
-  const mlgSet = new Set(mlg);
 
-  /* data ISO yyyy-mm-dd (locale indipendente) usata come seed */
-  const OGGI = new Date().toISOString().split("T")[0];
-
-  /* clone dell'hash FNV‑1a usata altrove (stableRand) – se non esiste lo definisco */
-  if (typeof window.stableRand !== 'function'){
-    window.stableRand = function(seed){
-      let h = 2166136261>>>0;
-      for(let i=0;i<seed.length;i++){
-        h ^= seed.charCodeAt(i);
-        h = Math.imul(h, 16777619);
-      }
-      return (h>>>0)/4294967296;
-    };
-  }
-
-  /**
-   * Restituisce un decimale fra 0.1 e 0.4 (1‑4) basato su seed deterministico
-   */
-  function decimale(seed){
-    /* risultati possibili 0,1 0,2 0,3 0,4 */
-    return 1 + Math.floor(window.stableRand(seed)*4); // intero 1‑4
-  }
-
-  /**
-   * Imposta decimali deterministici e distinti di almeno 0,2 °C
-   * lasciando invariata la parte intera e la differenza Tmax ≥ Tmin
-   */
-  function uniforma(ext, id){
-    if(ext.min==null || ext.max==null) return;
-
-    const intMin = Math.trunc(ext.min);
-    const intMax = Math.trunc(ext.max);
-
-    let dMin = decimale(id+"_min_"+OGGI); // 1‑4
-    let dMax = decimale(id+"_max_"+OGGI); // 1‑4
-
-    /* forza differenza decimale ≥2 (0,2 °C) */
-    if(Math.abs(dMin - dMax) < 2){
-      dMax = ((dMax + 2 - 1) % 4) + 1;  // ruota e resta in 1‑4
-    }
-
-    /* se parte intera è uguale, assicura Tmax ≥ Tmin */
-    if(intMax === intMin && dMax < dMin){
-      // scambia
-      const tmp = dMin;
-      dMin = dMax;
-      dMax = tmp;
-    }
-
-    ext.min = parseFloat((intMin + dMin/10).toFixed(1));
-    ext.max = parseFloat((intMax + dMax/10).toFixed(1));
-  }
-
-  /* esegue correzione su tutte le stazioni MLG presenti in extremiGiornalieri */
-  function correzioni(){
-    const ext = window.extremiGiornalieri;
-    if(!ext) return;
-    Object.entries(ext).forEach(([id, val])=>{
-      if(!mlgSet.has(id) || !val) return;
-      uniforma(val, id);
-    });
-  }
-
-  /* Hook alle funzioni originali in modo non invasivo */
-  function avvolgi(nome){
-    const orig = window[nome];
-    if(typeof orig === 'function' && !orig.__patchedDecMLG){
-      window[nome] = function(){
-        const res = orig.apply(this, arguments);
-        correzioni();
-        return res;
-      };
-      window[nome].__patchedDecMLG = true;
-    }
-  }
-
-  ["applicaJitter", "applicaEstremi"].forEach(avvolgi);
-
-  /* prima esecuzione e fail‑safe timer */
-  document.addEventListener('DOMContentLoaded', correzioni);
-  setInterval(correzioni, 5000);
-})();
-</script>
 <!-- ===== FINE PATCH DECIMALI MLG v11 ===== -->
 <!-- === PATCH: visibilità griglia (v7 - anti‑overlap + pulsante ORD) === -->
 <script>
@@ -6323,14 +6267,14 @@ if (capLines.length) {
        // Try explicit spans
        const sMax = popupEl.querySelector('.temp-max');
        const sMin = popupEl.querySelector('.temp-min');
-       if(sMax) sMax.innerHTML = '<b>Massima:</b> ' + (max!==null ? max.toFixed(1)+'°C' : '--');
-       if(sMin) sMin.innerHTML = '<b>Minima:</b> ' + (min!==null ? min.toFixed(1)+'°C' : '--');
+       if(sMax) sMax.innerHTML = '<b>Massima:</b> ' + (max!==null ? String(max)+'°C' : '--');
+       if(sMin) sMin.innerHTML = '<b>Minima:</b> ' + (min!==null ? String(min)+'°C' : '--');
        // Generic div replacement
        if(!sMax && !sMin){
           popupEl.querySelectorAll('.popup-data').forEach(div=>{
              if(div.textContent.includes('Min:') || div.textContent.includes('Minima:')){
-                 div.innerHTML = '<span class="bold">Min:</span> ' + (min!==null?min.toFixed(1)+'°C':'--') +
-                                 ' / <span class="bold">Max:</span> ' + (max!==null?max.toFixed(1)+'°C':'--');
+                 div.innerHTML = '<span class="bold">Min:</span> ' + (min!==null?String(min)+'°C':'--') +
+                                 ' / <span class="bold">Max:</span> ' + (max!==null?String(max)+'°C':'--');
              }
           });
        }
@@ -6404,7 +6348,7 @@ if (capLines.length) {
       if(wu && obs && obs.metric && typeof obs.metric.temp === "number"){
         const rand = fnvRand(String(staz.stationId||'') + today);
         if(rand >= 0.7){       // l'originale non lo applicherà
-          obs.metric.temp += parseFloat(offset(staz.stationId).toFixed(1));
+          obs.metric.temp += parseFloat(offset(staz.stationId));
         }
       }
 
@@ -6451,12 +6395,12 @@ if (capLines.length) {
       const rand = fnvRand(String(stid||'') + today);
       /* Se rand >=0.7 l'originale non ha messo offset: aggiungiamolo ora */
       if(rand >= 0.7){
-        const off = parseFloat(offset(stid).toFixed(1));
+        const off = parseFloat(offset(stid));
         if(typeof obj.tempVal === "number"){
-          obj.tempVal = parseFloat((obj.tempVal + off).toFixed(1));
+          obj.tempVal = parseFloat((obj.tempVal + off));
         }
         if(typeof obj.temp === "number"){
-          obj.temp = parseFloat((obj.temp + off).toFixed(1));
+          obj.temp = parseFloat((obj.temp + off));
         }
       }
     }
@@ -6490,64 +6434,7 @@ if (capLines.length) {
 })();
 </script>
 <!-- === /Patch WU offset & wind === -->
-<!-- ===== PATCH DECIMALI WU v12 – 2025-06-25 ===== -->
-<script>
-(function(){
 
-  /* ---------- Utilità comune ---------- */
-  const OGGI = new Date().toISOString().split("T")[0];
-  if (typeof window.stableRand !== 'function') {
-      window.stableRand = function(seed) {
-        let h = 2166136261 >>> 0;
-        for (let i = 0; i < seed.length; i++) {
-          h ^= seed.charCodeAt(i);
-          h = Math.imul(h, 16777619);
-        }
-        return (h >>> 0) / 4294967296;
-      };
-  }
-
-  function decimale(seed) { return 1 + Math.floor(window.stableRand(seed) * 4); } // 1‑4 → 0.1‑0.4
-
-  function uniforma(ext, id) {
-      if (!ext || ext.min == null || ext.max == null) return;
-      const intMin = Math.trunc(ext.min);
-      const intMax = Math.trunc(ext.max);
-      let dMin = decimale(id + "_min_" + OGGI);
-      let dMax = decimale(id + "_max_" + OGGI);
-      if (Math.abs(dMin - dMax) < 2) dMax = ((dMax + 2 - 1) % 4) + 1;
-      if (intMax === intMin && dMax < dMin) [dMin, dMax] = [dMax, dMin];
-      ext.min = parseFloat((intMin + dMin / 10).toFixed(1));
-      ext.max = parseFloat((intMax + dMax / 10).toFixed(1));
-  }
-
-  function isWU(id) { return /^I[A-Z0-9]/i.test(id); }
-
-  function applica() {
-      const ext = window.extremiGiornalieri;
-      if (!ext) return;
-      Object.entries(ext).forEach(([id, obj]) => { if (isWU(id)) uniforma(obj, id); });
-  }
-
-  function wrap(fnName) {
-      const orig = window[fnName];
-      if (typeof orig === 'function' && !orig.__patchedWUdec) {
-          window[fnName] = function() {
-              const res = orig.apply(this, arguments);
-              applica();
-              return res;
-          };
-          window[fnName].__patchedWUdec = true;
-      }
-  }
-
-  ["applicaJitter", "applicaEstremi"].forEach(wrap);
-
-  document.addEventListener("DOMContentLoaded", applica);
-  setInterval(applica, 5000);
-
-})();
-</script>
 <!-- ===== END PATCH DECIMALI WU v12 ===== -->
 <!-- Snapshot & QR libraries -->
 <script defer="" src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -7039,7 +6926,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const REL=0.12, MIN=0.5;
     const amp=Math.max(MIN, num*REL);
     const off=(0.3 + (r*0.8))*amp; // 0.2‑1.0 della ampiezza
-    return parseFloat((num + sign*off).toFixed(1));
+    return parseFloat((num + sign*off));
   }
   // Patch funzione globale aggiungiMarker se presente
   const retry=()=>{
@@ -7059,82 +6946,6 @@ document.addEventListener('DOMContentLoaded', function () {
 })();
 </script>
 <!-- === /PATCH WIND JITTER === -->
-<!-- CHATGPT surgical patch v2: single decimal formatting, no style changes -->
-<script>
-(function(){
-  function transformTextNode(node){
-    node.nodeValue = node.nodeValue
-      .replace(/(-?\d+\.\d+)/g, function(match){ return parseFloat(match).toFixed(1); })
-      .replace(/-3(?![\.\d])/g, '');
-  }
-  function process(container){
-    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
-    var node;
-    while(node = walker.nextNode()){
-      transformTextNode(node);
-    }
-  }
-  function clean(){
-    var table = document.getElementById('tabella');
-    if(table) process(table);
-    document.querySelectorAll('.leaflet-popup-content').forEach(function(popup){
-      process(popup);
-    });
-  }
-  ['aggiornaTabella','visualizzaAttuali','visualizzaEstremi',
-   'forzaEstremiPopupTestuale','aggiornaPopupConEstremiFinale',
-   'aggiornaPopupGrafico'].forEach(function(fn){
-    var orig = window[fn];
-    if(typeof orig === 'function'){
-      window[fn] = function(){
-        var result = orig.apply(this, arguments);
-        clean();
-        return result;
-      };
-    }
-  });
-  document.addEventListener('DOMContentLoaded', clean);
-})();
-</script>
-<!-- CHATGPT surgical patch v3: formatta mm senza zeri, singolo decimale e applica ai marker -->
-<script>
-(function(){
-  function processText(container){
-    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
-    var node;
-    while(node = walker.nextNode()){
-      var txt = node.nodeValue;
-      // Floats (non seguiti da mm): 1 decimale
-      txt = txt.replace(/(-?\d+\.\d+)(?!\s*mm)/g, function(m){ return parseFloat(m).toFixed(1); });
-      // Interi prima di ' mm': rimuove zeri iniziali (es. 00 -> 0, 03 -> 3)
-      txt = txt.replace(/\b0+(\d+)(?=\s*mm)/g, '$1');
-      // '00 mm' caso particolare: porta a '0 mm'
-      txt = txt.replace(/\b00(?=\s*mm)/g, '0');
-      // Rimuove residuali '-3'
-      txt = txt.replace(/-3(?![\.\d])/g, '');
-      node.nodeValue = txt;
-    }
-  }
-  function clean(){
-    processText(document.body);
-  }
-  // Lista di funzioni da hookare
-  var hooks = ['aggiornaTabella','visualizzaAttuali','visualizzaEstremi',
-               'forzaEstremiPopupTestuale','aggiornaPopupConEstremiFinale',
-               'aggiornaPopupGrafico'];
-  document.addEventListener('DOMContentLoaded', clean);
-  hooks.forEach(function(name){
-    var orig = window[name];
-    if(typeof orig === 'function'){
-      window[name] = function(){
-        var res = orig.apply(this, arguments);
-        clean();
-        return res;
-      };
-    }
-  });
-})();
-</script>
 <!-- === FAST-LOAD PATCH 2025-07-02 === -->
 <script id="fastload_20250702">
 (() => {
@@ -7623,7 +7434,7 @@ function calcolaTop10(){
 
    // Format values with unit
    const unit = (ultimoModo === 'umidita') ? '%' : (ultimoModo === 'raffica' ? ' km/h' : '°C');
-   return list.slice(0,10).map(o=>({ nome:o.nome, valore: o.valore.toFixed(1) + unit }));
+   return list.slice(0,10).map(o=>({ nome:o.nome, valore: o.valore + unit }));
 }
 </script>
 
@@ -8153,7 +7964,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   const getG=()=>{try{if(typeof datiTabella==='undefined'||typeof stazioni==='undefined'||typeof markersById==='undefined')return null;return{datiTabella,stazioni,markersById};}catch(_){return null;}};
 
-  const blend=(om,wu)=>+((om+WEIGHT*(wu-om)).toFixed(1));
+  const blend=(om,wu)=>+((om+WEIGHT*(wu-om)));
 
   /* ---- Popup helpers ---- */
   const updatePopupRow=(popup,val)=>{
@@ -8167,7 +7978,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const patchPopup=popup=>{
     const src=popup._source, sid=src&&src.stationId, g=getG(); if(!sid||!g) return;
     const r=g.datiTabella.find(x=>x.stationId===sid); if(!r) return;
-    const val=Number.isFinite(+r.pioggia)?(+r.pioggia).toFixed(1):'0.0';
+    const val=Number.isFinite(+r.pioggia)?(+r.pioggia):'0.0';
     updatePopupRow(popup,val);
   };
 
@@ -8398,7 +8209,7 @@ ut(finalizeLoad, MIN_MS);
       if(typeof of[key]!=='number') return;
       list.forEach(f=>{
         if(r[f]!=null && isNum(+r[f])){
-          const nv = +( (+r[f]) + of[key]).toFixed(1);
+          const nv = +( (+r[f]) + of[key]);
           if(nv !== r[f]){ r[f]=nv; window.__changedFlag = true; }
         }
       });
@@ -8411,8 +8222,8 @@ ut(finalizeLoad, MIN_MS);
     add(['percepitaVal','percepita'],'percepita');
     add(['raffica'],'raffica');
 
-    if(isNum(+r.tempVal)) r.temp = r.tempVal.toFixed(1);
-    if(isNum(+r.percepitaVal)) r.percepita = r.percepitaVal.toFixed(1);
+    if(isNum(+r.tempVal)) r.temp = r.tempVal;
+    if(isNum(+r.percepitaVal)) r.percepita = r.percepitaVal;
 
     if(window.extremiGiornalieri){
       const ext = window.extremiGiornalieri[r.stationId] = window.extremiGiornalieri[r.stationId] || {};
@@ -8424,9 +8235,9 @@ ut(finalizeLoad, MIN_MS);
   window.applyOffsetObs = function(staz,obs){
     const of = __findOff({stationId:staz?.stationId||staz?.id, nome:staz?.nome});
     if(!of) return;
-    if(isNum(+obs.temp)     && typeof of.temp ==='number') obs.temp     = +( (+obs.temp)    + of.temp ).toFixed(1);
-    if(isNum(+obs.temp_max) && typeof of.tmax ==='number') obs.temp_max = +( (+obs.temp_max)+ of.tmax ).toFixed(1);
-    if(isNum(+obs.temp_min) && typeof of.tmin ==='number') obs.temp_min = +( (+obs.temp_min)+ of.tmin ).toFixed(1);
+    if(isNum(+obs.temp)     && typeof of.temp ==='number') obs.temp     = +( (+obs.temp)    + of.temp );
+    if(isNum(+obs.temp_max) && typeof of.tmax ==='number') obs.temp_max = +( (+obs.temp_max)+ of.tmax );
+    if(isNum(+obs.temp_min) && typeof of.tmin ==='number') obs.temp_min = +( (+obs.temp_min)+ of.tmin );
   };
 
   window.applyOffsetsAll = function(){
@@ -8639,7 +8450,7 @@ window.addEventListener('load', function(){
               pioggia: data?.current?.precipitation,
               umidita: rh,
               raffica: data?.current?.wind_gusts_10m,
-              percepita: (perc!=null && isFinite(perc)) ? perc.toFixed(1) : '--',
+              percepita: (perc!=null && isFinite(perc)) ? perc : '--',
               percepitaVal: perc
             });
           }catch(e){ console.warn('OpenMeteo error', e); }
@@ -8698,7 +8509,7 @@ window.addEventListener('load', function(){
 
   function fmt(v, unit){
       var n = parseFloat(v);
-      return Number.isFinite(n) ? n.toFixed(1) + unit : '--';
+      return Number.isFinite(n) ? n + unit : '--';
   }
 
   function patchPopup(popup){
@@ -8756,7 +8567,7 @@ window.addEventListener('load', function(){
 
   function oneDec(num){
     const v = parseFloat(String(num).replace(',', '.'));
-    return Number.isFinite(v) ? v.toFixed(1) : num;
+    return Number.isFinite(v) ? v : num;
   }
 
   function cleanMarkerEl(el){
@@ -8818,8 +8629,8 @@ window.addEventListener('load', function(){
             if(d && d.tempVal != null){
               const tv = parseFloat(d.tempVal);
               if(Number.isFinite(tv)){
-                d.tempVal = parseFloat(tv.toFixed(1));
-                d.temp = d.tempVal.toFixed(1);
+                d.tempVal = parseFloat(tv);
+                d.temp = d.tempVal;
               }
             }
           });
@@ -8878,7 +8689,7 @@ window.addEventListener('load', function(){
         const el=mk.getElement();
         if(el){
           const span=el.querySelector('span');
-          if(span) span.textContent=v.toFixed(1)+'°';
+          if(span) span.textContent=v+'°';
           if(window.getColor) el.style.backgroundColor=getColor(v);
         }
         const popup=mk.getPopup && mk.getPopup();
@@ -8887,7 +8698,7 @@ window.addEventListener('load', function(){
           if(n){
             [...n.querySelectorAll('.popup-data')].forEach(node=>{
               if(/Temp:/i.test(node.textContent)){
-                 node.innerHTML='<span class="bold">Temp:</span> '+v.toFixed(1)+'°C';
+                 node.innerHTML='<span class="bold">Temp:</span> '+v+'°C';
               }else if(/Temp\. percepita:/i.test(node.textContent)){
                  // leave percepita alone
               }
@@ -8897,7 +8708,7 @@ window.addEventListener('load', function(){
       }
       // Tabella
       const cell=document.querySelector(`[data-station-id='${r.stationId}'][data-field='temp']`);
-      if(cell) cell.textContent=v.toFixed(1);
+      if(cell) cell.textContent=v;
     });
   }
 
@@ -8979,7 +8790,7 @@ window.addEventListener('load', function(){
       if(beforeRain!=null){
          if(beforeRain <= 0.1){
             /* do NOT apply any offset if raw rain ≤0.1 mm */
-            r.pioggia = parseFloat(beforeRain.toFixed(1));
+            r.pioggia = parseFloat(beforeRain);
          }else if(isNum(r.pioggia)){
             /* never show negative after offsets */
             if(r.pioggia < 0) r.pioggia = 0;
@@ -9020,7 +8831,7 @@ window.addEventListener('load', function(){
         /* ------- Rain rules -------- */
         if(rawRain!=null){
            if(rawRain <= 0.1){
-              r.pioggia = parseFloat(rawRain.toFixed(1));
+              r.pioggia = parseFloat(rawRain);
            }else if(isNum(r.pioggia) && r.pioggia < 0){
               r.pioggia = 0;
            }
@@ -9096,9 +8907,9 @@ window.addEventListener('load', function(){
     if (!isFinite(n)) return;
     const c = KtoC(n);
     if (c !== n){
-      obj[key] = parseFloat(c.toFixed(1));
+      obj[key] = parseFloat(c);
       const strKey = (key === "temp" ? "temp" : key);
-      if (strKey === "temp") obj["temp"] = obj[key].toFixed(1);
+      if (strKey === "temp") obj["temp"] = obj[key];
     }
   }
   function coerceName(s){
@@ -9117,8 +8928,8 @@ window.addEventListener('load', function(){
       for(const id in obj){
         const e = obj[id];
         if(!e) continue;
-        if("min" in e && isNum(e.min)) e.min = parseFloat(KtoC(e.min).toFixed(1));
-        if("max" in e && isNum(e.max)) e.max = parseFloat(KtoC(e.max).toFixed(1));
+        if("min" in e && isNum(e.min)) e.min = parseFloat(KtoC(e.min));
+        if("max" in e && isNum(e.max)) e.max = parseFloat(KtoC(e.max));
       }
     }
     sanitizeAll(_ext);
@@ -9144,7 +8955,7 @@ window.addEventListener('load', function(){
       if(!r) return;
       // Kelvin → °C on all relevant numeric fields
       ["tempVal","tMin","tMax","percepitaVal"].forEach(k=>fixTempField(r,k));
-      if (isNum(r.tempVal)) r.temp = r.tempVal.toFixed(1);
+      if (isNum(r.tempVal)) r.temp = r.tempVal;
       // Humidity bounds
       if (isNum(r.umidita)){
         if (r.umidita > 100) r.umidita = 100;
@@ -9184,7 +8995,7 @@ window.addEventListener('load', function(){
               const num = parseFloat(tok.replace("°C","").replace(",","."));
               const conv = KtoCnum(num);
               if (conv !== num){
-                const rep = tok.replace(String(num), conv.toFixed(1));
+                const rep = tok.replace(String(num), conv);
                 newTxt = newTxt.replace(tok, rep);
               }
             });
@@ -9203,33 +9014,8 @@ window.addEventListener('load', function(){
     hook();
   })();
 
-  /* ---------- 4) Daily precipitation for MeteoHub stations via Open‑Meteo ---------- */
-  async function aggiornaPioggiaMH(){
-    try{
-      if(!Array.isArray(window.datiTabella) || !Array.isArray(window.stazioni)) return;
-      const today = new Date().toISOString().split("T")[0];
-      const mhRows = window.datiTabella.filter(r => r && /^MH_/.test(String(r.stationId||"")));
-      const byId = (window.stazioni || []).reduce((a,s)=>{a[s.stationId]=s;return a;}, {});
-      for(const r of mhRows){
-        const s = byId[r.stationId];
-        if(!s || !isFinite(s.lat) || !isFinite(s.lon)) continue;
-        try{
-          const url = `https://api.open-meteo.com/v1/forecast?latitude=${s.lat}&longitude=${s.lon}&daily=precipitation_sum&timezone=auto&start_date=${today}&end_date=${today}`;
-          const resp = await fetch(url);
-          const data = await resp.json();
-          const mm = (data && data.daily && data.daily.precipitation_sum && data.daily.precipitation_sum[0]) || 0;
-          r.pioggia = isFinite(mm) ? +mm : 0;
-        }catch(_){}
-      }
-      if(typeof window.aggiornaTabella === "function") window.aggiornaTabella();
-    }catch(e){ console.warn("MH precip update", e); }
-  }
-
-  if (document.readyState === "complete") setTimeout(aggiornaPioggiaMH, 1500);
-  else window.addEventListener("load", () => setTimeout(aggiornaPioggiaMH, 1500));
-  [20000, 60000, 120000].forEach(ms => setTimeout(aggiornaPioggiaMH, ms));
-})();
-</script>
+  /* Daily precipitation via Open‑Meteo (disabled: now using MeteoHub API totals) */
+<script>(function(){ /* disabled */ })();</script>
 
 <!-- === BEGIN: MeteoHub full integration (Lo Gullo) — 2025‑10‑08 === -->
 <script>
@@ -9458,13 +9244,13 @@ const name = st.name
       window.datiTabella.push({
         stationId: r.id,
         nome: r.name,
-        temp: isFiniteNum(r.t) ? +r.t.toFixed(1) : "--",
+        temp: isFiniteNum(r.t) ? +r.t : "--",
         tempVal: isFiniteNum(r.t) ? r.t : null,
         umidita: isFiniteNum(r.rh) ? +r.rh : "--",
         vento: isFiniteNum(r.ws) ? +r.ws : "--",
         raffica: isFiniteNum(r.wg) ? +r.wg : "--",
-        pioggia: isFiniteNum(r.rain_today) ? +r.rain_today.toFixed(1) : 0,
-        percepita: isFiniteNum(percepita) ? +percepita.toFixed(1) : "--",
+        pioggia: isFiniteNum(r.rain_today) ? +r.rain_today : 0,
+        percepita: isFiniteNum(percepita) ? +percepita : "--",
         percepitaVal: percepita
       });
     }
@@ -9570,8 +9356,8 @@ const name = st.name
       // salva in memoria pubblica per popup
       window.extremiGiornalieri = window.extremiGiornalieri || {};
       window.extremiGiornalieri[r.id] = {
-        min: isFinite(prev.min) ? +prev.min.toFixed(1) : null,
-        max: isFinite(prev.max) ? +prev.max.toFixed(1) : null
+        min: isFinite(prev.min) ? +prev.min : null,
+        max: isFinite(prev.max) ? +prev.max : null
       };
 
       rows.push(r);
@@ -9723,8 +9509,8 @@ const name = st.name
 
     // Apply per-station offsets if present
     const off = getOffsetSafe(stationId);
-    if (Number.isFinite(min)) min = +(min + (off.tmin||0)).toFixed(1);
-    if (Number.isFinite(max)) max = +(max + (off.tmax||0)).toFixed(1);
+    if (Number.isFinite(min)) min = (min + (off.tmin||0));
+    if (Number.isFinite(max)) max = (max + (off.tmax||0));
 
     return { min, max };
   }
@@ -9962,8 +9748,8 @@ const name = st.name
       // apply offsets if available
       let off = { tmin:0, tmax:0 };
       try{ off = (typeof window.getOffset==="function") ? (window.getOffset(stationId)||off) : off; }catch{}
-      if (Number.isFinite(min)) min = +(min + (off.tmin||0)).toFixed(1);
-      if (Number.isFinite(max)) max = +(max + (off.tmax||0)).toFixed(1);
+      if (Number.isFinite(min)) min = (min + (off.tmin||0));
+      if (Number.isFinite(max)) max = (max + (off.tmax||0));
 
       return { min, max };
     }catch(e){
@@ -10191,8 +9977,8 @@ const name = st.name
 
     let off = { tmin:0, tmax:0 };
     try{ off = (typeof window.getOffset==="function") ? (window.getOffset(stationId)||off) : off; }catch{}
-    if (Number.isFinite(min)) min = +(min + (off.tmin||0)).toFixed(1);
-    if (Number.isFinite(max)) max = +(max + (off.tmax||0)).toFixed(1);
+    if (Number.isFinite(min)) min = (min + (off.tmin||0));
+    if (Number.isFinite(max)) max = (max + (off.tmax||0));
     return { min, max };
   }
 
@@ -10647,7 +10433,7 @@ const name = st.name
       redrawGeneric((d)=>{
         const valore=getEstremoGiornaliero(d.stationId,tipo); if(typeof valore==='undefined') return;
         const colore=getColor(valore); const textColor=getTextColorForBackground(colore);
-        setMarkerCircle(d.stationId,{textHTML:`<span style="color:${textColor};">${Number(valore).toFixed(1)}°</span>`,bg:colore,widthPx:40,heightPx:40});
+        setMarkerCircle(d.stationId,{textHTML:`<span style="color:${textColor};">${String(valore)}°</span>`,bg:colore,widthPx:40,heightPx:40});
       });
     };
   }
@@ -10665,6 +10451,234 @@ const name = st.name
   console.info('[perf-patch] ULTRA mode active: chunked + culling.');
 })();
 </script>
+
+<!-- === MOBILE FIX 2025-10-14 === -->
+<style id="mlg-mobile-tighten-2025-10-14">
+/* 1) Compatta ulteriormente il banner su smartphone (meno blu sopra/sotto) */
+@media (max-width: 540px){
+  header.mlg-banner{
+    padding-top: 2px !important;
+    padding-bottom: 4px !important;
+    margin-bottom: 6px !important;
+  }
+  header.mlg-banner .mlg-inner{
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+    row-gap: 2px !important;
+  }
+}
+
+/* 2) Sidebar e indicator non devono sovrapporsi al banner */
+#sidebar{ top: calc(var(--mlg-banner-h, 64px) + 6px) !important; }
+#map-indicator{ top: calc(var(--mlg-banner-h, 64px) + 10px) !important; }
+
+/* 3) Nasconde il badge verde "ESTREMI BLOCCATI (Firebase)" */
+#badge-freeze-estremi{ display:none !important; visibility:hidden !important; opacity:0 !important; }
+</style>
+
+<script id="mlg-measure-banner-and-shift-2025-10-14">
+(function(){
+  function setBannerVar(){
+    try{
+      var h = 0;
+      var header = document.querySelector('header.mlg-banner');
+      if(header){
+        h = Math.round(header.getBoundingClientRect().height);
+        if(!h || h < 40) h = 56; // fallback mobile
+      }else{
+        h = 56;
+      }
+      document.documentElement.style.setProperty('--mlg-banner-h', h + 'px');
+
+      // Allinea componenti flottanti che usano un valore fisso
+      var sb = document.getElementById('sidebar');
+      if(sb){ sb.style.top = 'calc(var(--mlg-banner-h) + 6px)'; }
+
+      var ind = document.getElementById('map-indicator');
+      if(ind){ ind.style.top = 'calc(var(--mlg-banner-h) + 10px)'; }
+
+      var rc = document.getElementById('radar-controls');
+      if(rc){ rc.style.top = 'calc(var(--mlg-banner-h) + 50px)'; } // prima era 120px fissi
+    }catch(_){}
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', setBannerVar, {once:true});
+  }else{
+    setBannerVar();
+  }
+  window.addEventListener('load', setBannerVar);
+  window.addEventListener('resize', setBannerVar);
+})();
+</script>
+<!-- === /MOBILE FIX 2025-10-14 === -->
+
+<!-- === FINAL HOTFIX 2025-10-14: decimali 1 cifra, pop‑up stabili, rimozione Min/Max riga === -->
+<script id="final_hotfix_2025_10_14">
+(function(){
+  if (window.__final_hotfix_20251014) return;
+  window.__final_hotfix_20251014 = true;
+
+  /* ---- utils ---- */
+  function to1(n){
+    const v = parseFloat(String(n).replace(',', '.'));
+    return Number.isFinite(v) ? v.toFixed(1) : '--';
+  }
+  function isNum(n){
+    const v = parseFloat(String(n).replace(',', '.'));
+    return Number.isFinite(v);
+  }
+
+  /* ---- 1) Marker: forza UN SOLO decimale ---- */
+  function cleanMarkerEl(el){
+    if(!el) return;
+    const span = el.querySelector && el.querySelector('span');
+    if(!span) return;
+    const txt = span.textContent || '';
+    const m = txt.replace(',', '.').match(/-?\d+(?:\.\d+)?/);
+    if(m){
+      const hasDeg = /°/.test(txt);
+      span.textContent = to1(m[0]) + (hasDeg ? '°' : '');
+    }
+  }
+  function cleanAllMarkers(){
+    document.querySelectorAll('.leaflet-marker-icon').forEach(cleanMarkerEl);
+  }
+  // iniziale + continuo (leggero)
+  document.addEventListener('DOMContentLoaded', function(){
+    setTimeout(cleanAllMarkers, 600);
+    setInterval(cleanAllMarkers, 3500);
+  });
+
+  /* ---- 2) Pop‑up: stabilizza campi + formato a 1 decimale ---- */
+  function fixPopup(popup){
+    const el = popup && popup.getElement && popup.getElement();
+    if(!el) return;
+
+    // elimina qualunque riga Min/Max aggiunta da patch precedenti (richiesta utente)
+    el.querySelectorAll('.mh-minmax-row, .popup-data').forEach(n => {
+      const t = (n.textContent || '').trim();
+      if (/^(Min(?:ima)?|Max(?:sima)?)/i.test(t)) n.remove();
+    });
+
+    // identifica station id
+    const sidAttr = el.querySelector('.popup-wrapper')?.getAttribute('data-station-id');
+    const sid = sidAttr || (popup._source && (popup._source.stationId || popup._source.options?.stationId)) || null;
+
+    const row = (Array.isArray(window.datiTabella) ? window.datiTabella.find(r => r.stationId === sid) : null) || {};
+
+    function setRow(label, value, unit){
+      const node = Array.from(el.querySelectorAll('.popup-data')).find(d => (d.textContent || '').trim().startsWith(label));
+      if(!node) return;
+      const v = isNum(value) ? (to1(value) + (unit || '')) : '--';
+      node.innerHTML = '<span class="bold">'+label+'</span> ' + v;
+    }
+
+    setRow('Temp:', row.temp, '°C');
+    setRow('Umidità:', row.umidita, '%');
+    setRow('Temp. percepita:', row.percepita, '°C');
+
+    // Vento / Raffica riga combinata
+    const ventoNode = Array.from(el.querySelectorAll('.popup-data')).find(d => /Vento:/i.test(d.textContent || ''));
+    if (ventoNode){
+      const v = isNum(row.vento) ? (to1(row.vento) + ' km/h') : '--';
+      const g = isNum(row.raffica) ? (to1(row.raffica) + ' km/h') : '--';
+      ventoNode.innerHTML = '<span class="bold">Vento:</span> ' + v + ' / <span class="bold">Raffica:</span> ' + g;
+    }
+
+    // Pioggia
+    const rainNode = Array.from(el.querySelectorAll('.popup-data')).find(d => /Pioggia:/i.test(d.textContent || ''));
+    if (rainNode){
+      const p = isNum(row.pioggia) ? (to1(row.pioggia) + ' mm') : '0 mm';
+      rainNode.innerHTML = '<span class="bold">Pioggia:</span> ' + p;
+    }
+  }
+
+  function hookPopups(){
+    const m = window.map || window.mymap;
+    if(!m){ setTimeout(hookPopups, 400); return; }
+    m.on('popupopen', e => { try{ fixPopup(e.popup); }catch(_){ } });
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hookPopups);
+  else hookPopups();
+
+  /* ---- 3) Disinnesca aggiunta futura della riga Min/Max ---- */
+  if (typeof window.aggiornaPopupConEstremiFinale === 'function' && !window.aggiornaPopupConEstremiFinale.__noMinMax){
+    const _orig = window.aggiornaPopupConEstremiFinale;
+    window.aggiornaPopupConEstremiFinale = function(){
+      const r = _orig.apply(this, arguments);
+      const p = (window.map || window.mymap)?._popup : null;
+      if (p) try{ fixPopup(p); }catch(_){}
+      return r;
+    };
+    window.aggiornaPopupConEstremiFinale.__noMinMax = true;
+  }
+
+  // 4) Espone un util per debug manuale
+  window.__mlgFixDecimals = function(){ cleanAllMarkers(); (window.map||window.mymap)?._popup && fixPopup((window.map||window.mymap)._popup); };
+})();
+</script>
+
+
+<!-- === ChatGPT One-Decimal Sanitizer v2.0 (aggressive + debounced) === -->
+<script id="one-decimal-sanitizer">
+(function(){
+  // Match numbers with 2+ decimals (handles negatives too)
+  var DEC_REGEX = /(-?\d+\.\d{2,})/g;
+
+  function roundText(s){
+    return s.replace(DEC_REGEX, function(_, num){
+      var v = Number(num);
+      if (!Number.isFinite(v)) return num;
+      return v.toFixed(1);
+    });
+  }
+
+  function walkAndFix(root){
+    if(!root) return;
+    try{
+      var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      var node;
+      while(node = walker.nextNode()){
+        var t = node.nodeValue;
+        if(!t || t.indexOf('.') === -1) continue;
+        var nt = roundText(t);
+        if(nt !== t) node.nodeValue = nt;
+      }
+    }catch(e){ /* noop */ }
+  }
+
+  // Debounced sanitize pass (whole body + common Leaflet panes)
+  var rafPending = false;
+  function requestSanitize(){
+    if(rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(function(){
+      rafPending = false;
+      walkAndFix(document.body);
+      // Extra: sanitize popups/marker panes explicitly in case they're in portals
+      var extras = document.querySelectorAll('.leaflet-popup, .leaflet-marker-pane, .leaflet-popup-content, #tabella, #anteprima-dati-testuali');
+      extras.forEach(walkAndFix);
+    });
+  }
+
+  // Observe all DOM mutations (character data & new nodes)
+  var mo = new MutationObserver(function(){
+    requestSanitize();
+  });
+  try{
+    mo.observe(document.documentElement, {subtree:true, childList:true, characterData:true});
+  }catch(e){}
+
+  // Initial passes
+  document.addEventListener('DOMContentLoaded', requestSanitize);
+  window.addEventListener('load', requestSanitize);
+
+  // Helper for manual formatting if needed elsewhere
+  window.__fmt1__ = function(v){ var n = Number(v); return Number.isFinite(n) ? n.toFixed(1) : v; };
+})();
+</script>
+<!-- === /One-Decimal Sanitizer === -->
+
 </body>
 
 
@@ -10728,14 +10742,14 @@ const name = st.name
         const omT = +r.tempVal, wuT = +near.tempVal;
         if(isNum(omT)&&isNum(wuT)){
            if(Math.abs(omT-wuT)>=THR_TEMP){
-              const newT=+lerp(omT,wuT,W).toFixed(1) + jitter(r.stationId,0.15);
-              const adjT=+newT.toFixed(1);
-              if(adjT!==r.tempVal){r.tempVal=adjT;r.temp=adjT.toFixed(1);changed=true;}
+              const newT=+lerp(omT,wuT,W) + jitter(r.stationId,0.15);
+              const adjT=+newT;
+              if(adjT!==r.tempVal){r.tempVal=adjT;r.temp=adjT;changed=true;}
            }
         }else if(!isNum(omT)&&isNum(wuT)){
            /* Fallback: OM mancante -> adotta WU + jitter */
-           const adj=+((wuT + jitter(r.stationId,0.25)).toFixed(1));
-           if(adj!==r.tempVal){r.tempVal=adj;r.temp=adj.toFixed(1);changed=true;}
+           const adj=+((wuT + jitter(r.stationId,0.25)));
+           if(adj!==r.tempVal){r.tempVal=adj;r.temp=adj;changed=true;}
         }
 
         /* ---------------- Umidità ---------------------------------------- */
@@ -10758,12 +10772,12 @@ const name = st.name
 
            if(om!=null){
               if(Math.abs(om-wu)>=thr){
-                 const val=+lerp(om,wu,W).toFixed(1)+jitter(r.stationId,delta);
-                 const adj=+val.toFixed(1);
+                 const val=+lerp(om,wu,W)+jitter(r.stationId,delta);
+                 const adj=+val;
                  if(adj!==r[keyOM]){r[keyOM]=adj;changed=true;}
               }
            }else{
-              const adj=+((wu + jitter(r.stationId,delta)).toFixed(1));
+              const adj=+((wu + jitter(r.stationId,delta)));
               if(adj!==r[keyOM]){r[keyOM]=adj;changed=true;}
            }
         }
@@ -10798,9 +10812,9 @@ const name = st.name
             if(of && !r.__chatgptOff){
                function add(field,key,mirror){
                   if(r[field]!=null && isNum(+r[field]) && typeof of[key]==='number'){
-                    const v = +( (+r[field]) + of[key] ).toFixed(1);
+                    const v = +( (+r[field]) + of[key] );
                     if(v!==r[field]){ r[field]=v; changed=true; }
-                    if(mirror){ r[mirror]=typeof r[mirror]==='number'? v : v.toFixed ? v.toFixed(1):v; }
+                    if(mirror){ r[mirror]=typeof r[mirror]==='number'? v : v.toFixed ? v:v; }
                   }
                }
                add('tempVal','temp','temp');
@@ -11065,12 +11079,12 @@ const name = st.name
           window.datiTabella.push({
             stationId,
             nome: s.name,
-            temp: Number.isFinite(s.t) ? s.t.toFixed(1) : "--",
+            temp: Number.isFinite(s.t) ? s.t : "--",
             tempVal: Number.isFinite(s.t) ? s.t : null,
             pioggia: Number.isFinite(s.rr) ? s.rr : 0,
             umidita: Number.isFinite(s.rh) ? s.rh : "--",
             raffica: Number.isFinite(s.wg) ? s.wg : "--",
-            percepita: Number.isFinite(percepitaVal) ? percepitaVal.toFixed(1) : "--",
+            percepita: Number.isFinite(percepitaVal) ? percepitaVal : "--",
             percepitaVal
           });
 
@@ -11080,8 +11094,8 @@ const name = st.name
           prev.max = Math.max(prev.max, s.t);
           ext.byId[stationId] = prev;
           window.extremiGiornalieri[stationId] = {
-            min: Number.isFinite(prev.min) ? prev.min.toFixed(1) : "--",
-            max: Number.isFinite(prev.max) ? prev.max.toFixed(1) : "--"
+            min: Number.isFinite(prev.min) ? prev.min : "--",
+            max: Number.isFinite(prev.max) ? prev.max : "--"
           };
         }
       }
@@ -11139,8 +11153,8 @@ function aggiornaPopupConEstremi(marker, stazione) {
       });
 
       contenuto += `<div class='popup-sub'>Estremi giornalieri</div>`;
-      contenuto += `<div class='popup-data'>Min: <span class='bold'>${min !== Infinity ? min.toFixed(1) : '-' }°C</span></div>`;
-      contenuto += `<div class='popup-data'>Max: <span class='bold'>${max !== -Infinity ? max.toFixed(1) : '-' }°C</span></div>`;
+      contenuto += `<div class='popup-data'>Min: <span class='bold'>${min !== Infinity ? min : '-' }°C</span></div>`;
+      contenuto += `<div class='popup-data'>Max: <span class='bold'>${max !== -Infinity ? max : '-' }°C</span></div>`;
       contenuto += `<div class='popup-data'><em>Debug: ${count} valori trovati</em></div>`;
     } catch (e) {
       contenuto += `<div class='popup-data'>Errore: ${e.message}</div>`;
@@ -11205,8 +11219,8 @@ function visualizzaRaffiche() {
     try {
       const { min, max } = await getExtremesFromFirebase(stationId);
       contenuto += `<div class="popup-sub">Estremi giornalieri</div>`;
-      contenuto += `<div class="popup-data">Min: <span class="bold">${min !== null ? min.toFixed(1) : '-' }°C</span></div>`;
-      contenuto += `<div class="popup-data">Max: <span class="bold">${max !== null ? max.toFixed(1) : '-' }°C</span></div>`;
+      contenuto += `<div class="popup-data">Min: <span class="bold">${min !== null ? min : '-' }°C</span></div>`;
+      contenuto += `<div class="popup-data">Max: <span class="bold">${max !== null ? max : '-' }°C</span></div>`;
     } catch (e) {
       contenuto += `<div class="popup-data">Errore nel recupero estremi</div>`;
     }
@@ -11432,7 +11446,7 @@ function visualizzaRaffiche() {
         pioggia     : d?.current?.precipitation,
         umidita     : rh,
         raffica     : d?.current?.wind_gusts_10m,
-        percepita   : (perc!=null && isFinite(perc)) ? perc.toFixed(1) : '--',
+        percepita   : (perc!=null && isFinite(perc)) ? perc : '--',
         percepitaVal: perc
       };
       window.datiTabella = window.datiTabella || [];
@@ -11541,7 +11555,7 @@ function visualizzaRaffiche() {
   function isNum(x){ return typeof x === 'number' && isFinite(x); }
   function toNum(x){
     const n = Number(x);
-    return isFinite(n) ? +(+n).toFixed(1) : NaN;
+    return isFinite(n) ? +(+n) : NaN;
   }
 
   function collectIds(){
@@ -11555,7 +11569,7 @@ function visualizzaRaffiche() {
     // prova varie sorgenti
     if (typeof window.getEstremoGiornaliero === "function"){
       const v = window.getEstremoGiornaliero(id, 'min');
-      if (isNum(v)) return +(+v).toFixed(1);
+      if (isNum(v)) return +(+v);
     }
     const e = window.extremiGiornalieri && window.extremiGiornalieri[id];
     if (e && isNum(toNum(e.min))) return toNum(e.min);
@@ -11566,7 +11580,7 @@ function visualizzaRaffiche() {
   function currentMax(id){
     if (typeof window.getEstremoGiornaliero === "function"){
       const v = window.getEstremoGiornaliero(id, 'max');
-      if (isNum(v)) return +(+v).toFixed(1);
+      if (isNum(v)) return +(+v);
     }
     const e = window.extremiGiornalieri && window.extremiGiornalieri[id];
     if (e && isNum(toNum(e.max))) return toNum(e.max);
@@ -11622,7 +11636,7 @@ function visualizzaRaffiche() {
           const f = window.__frozenExtremes && window.__frozenExtremes[stationId];
           if (f){
             const v = (tipo==='max') ? f.max : f.min;
-            if (isNum(v)) return +(+v).toFixed(1);
+            if (isNum(v)) return +(+v);
           }
         }
         if (typeof orig === 'function') return orig.apply(this, arguments);
@@ -11751,7 +11765,7 @@ if (typeof window.aggiornaTabella === 'function') window.aggiornaTabella();
   const isNum = x => typeof x === 'number' && isFinite(x);
   const toNum = x => {
     const n = Number(x);
-    return isFinite(n) ? +(+n).toFixed(1) : NaN;
+    return isFinite(n) ? +(+n) : NaN;
   };
   const clampPlausible = (n) => isNum(n) && n>-60 && n<60; // euristico
   const getNow = () => new Date();
@@ -11784,7 +11798,7 @@ if (typeof window.aggiornaTabella === 'function') window.aggiornaTabella();
     if (e && isNum(toNum(e.min))) return toNum(e.min);
     if (typeof window.getEstremoGiornaliero === "function"){
       const v = window.getEstremoGiornaliero(id,'min');
-      if (isNum(v)) return +(+v).toFixed(1);
+      if (isNum(v)) return +(+v);
     }
     return NaN;
   }
@@ -11793,7 +11807,7 @@ if (typeof window.aggiornaTabella === 'function') window.aggiornaTabella();
     if (e && isNum(toNum(e.max))) return toNum(e.max);
     if (typeof window.getEstremoGiornaliero === "function"){
       const v = window.getEstremoGiornaliero(id,'max');
-      if (isNum(v)) return +(+v).toFixed(1);
+      if (isNum(v)) return +(+v);
     }
     return NaN;
   }
@@ -11880,7 +11894,7 @@ if (typeof window.aggiornaTabella === 'function') window.aggiornaTabella();
           const f = STATE.frozenExtremes[stationId];
           if (f){
             const v = (tipo==='max') ? f.max : f.min;
-            if (isNum(v)) return +(+v).toFixed(1);
+            if (isNum(v)) return +(+v);
           }
         }
         if (typeof orig === 'function') return orig.apply(this, arguments);
@@ -12023,7 +12037,7 @@ if (typeof window.aggiornaTabella === 'function') window.aggiornaTabella();
   const isNum = x => typeof x === 'number' && isFinite(x);
   const toNum = x => {
     const n = Number(x);
-    return isFinite(n) ? +(+n).toFixed(1) : NaN;
+    return isFinite(n) ? +(+n) : NaN;
   };
 
   // 1) AVVIO SU TEMPERATURE LIVE (ATTUALI)
@@ -12095,14 +12109,14 @@ if (typeof window.aggiornaTabella === 'function') window.aggiornaTabella();
         // quindi qui non serve altro.
       }
 
-      if (isNum(v)) return +(+v).toFixed(1);
+      if (isNum(v)) return +(+v);
 
       // Ultimo fallback: NON ricadere su attuali. Restituisci NaN se il valore non esiste.
       if (typeof orig === 'function') {
         // Chiama l'originale ma ignora eventuali fallback a "attuali" implementati a valle
         const ov = orig.apply(this, arguments);
         const ovn = toNum(ov);
-        if (isNum(ovn) && !(isNum(t) && Math.abs(ovn - t) < 0.01)) return +(+ovn).toFixed(1);
+        if (isNum(ovn) && !(isNum(t) && Math.abs(ovn - t) < 0.01)) return +(+ovn);
       }
       return NaN;
     };
