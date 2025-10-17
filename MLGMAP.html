@@ -3147,7 +3147,223 @@ header.mlg-banner .mlg-search button i.fa-solid:empty + .fallback-label{
 
 </head><body><div class="wrap"><h1>Menu MLG</h1><div class="grid">
         ${items}
-        </div></div></body></html>`;
+        </div></div>
+<!-- === MLG: FIX MeteoHub popup enrichment (humidity, wind, gusts, rain) === -->
+<script>
+(function(){
+  if (!window.L) return;
+
+  function pad(n){return String(n).padStart(2,'0');}
+  function fmtUTC(d){
+    return d.getUTCFullYear()+"-"+pad(d.getUTCMonth()+1)+"-"+pad(d.getUTCDate())+" "+pad(d.getUTCHours())+":"+pad(d.getUTCMinutes());
+  }
+  function toNum(v){const n=Number(v); return isFinite(n)?n:null;}
+  function getPool(st){return st?.prod || st?.products || st?.var || st?.variables || st;}
+  function getProd(st, code){
+    const P=getPool(st); if(!P) return null;
+    if (Array.isArray(P)) return P.find(p => String(p.var||p.code||"").toUpperCase()===String(code).toUpperCase()) || null;
+    if (typeof P==="object") return P[code] || P[String(code)] || null;
+    return null;
+  }
+  function series(prod){
+    const raw = prod?.val ?? prod?.values ?? prod?.series ?? prod;
+    const out=[];
+    if (Array.isArray(raw)){
+      for (const r of raw){
+        if (r && typeof r==="object" && "val" in r){
+          out.push({val: Number(r.val), time: r.ref || r.reftime || r.time || r.ts});
+        }
+      }
+    }
+    return out.filter(x => isFinite(x.val));
+  }
+  function todayOnly(s){
+    const d=new Date(); const y=d.getUTCFullYear(), m=d.getUTCMonth()+1, dd=d.getUTCDate();
+    const k = y+"-"+String(m).padStart(2,'0')+"-"+String(dd).padStart(2,'0');
+    return (s||[]).filter(p=>p.time && String(p.time).slice(0,10)===k).sort((a,b)=> new Date(a.time)-new Date(b.time));
+  }
+  function rainTodayCalc(seriesAll){
+    const s=todayOnly(seriesAll);
+    if(!s.length) return 0;
+    // cumulata non decrescente -> differenza
+    let nonDec=true;
+    for(let i=1;i<s.length;i++){ if (s[i].val < s[i-1].val - 1e-6){ nonDec=false; break; } }
+    if (nonDec) return Math.max(0, s[s.length-1].val - s[0].val);
+    // incrementale -> somma
+    let sum=0; for(const p of s){ if (p.val >= 0) sum+=p.val; }
+    return sum;
+  }
+  function lastVal(prod){
+    const s=series(prod); if (s.length) return s[s.length-1].val;
+    const v=Number(prod?.val); return isFinite(v)? v : null;
+  }
+  function toKmH(value, unit){
+    if (value==null || isNaN(value)) return null;
+    const u=(unit||"").toUpperCase();
+    if (u.includes("M/S")) return value*3.6;
+    if (u.includes("KM/H")||u.includes("KMH")) return value;
+    if (u.includes("KT") || u.includes("KNOT")) return value*1.852;
+    return value<60 ? value*3.6 : value; // fallback prudente
+  }
+
+  function buildQuery(){
+    const now=new Date(), from=new Date(now.getTime()-36*3600*1000);
+    return (
+      "reftime: >="+fmtUTC(from)+",<="+fmtUTC(now)+";"+
+      "timerange:254,0,0 or 1,0,3600;"+
+      "level:103,2000,0,0 or 1,0,0,0 or 103,10000,0,0;"+
+      "license:CCBY_COMPLIANT;"+
+      "product:B12101 or B13003 or B11002 or B11001 or B11041 or B11042 or B13011"
+    );
+  }
+
+  async function fetchAround(lat, lon){
+    const base = new URL("https://meteohub.agenziaitaliameteo.it/api/observations");
+    base.searchParams.set("q", buildQuery());
+    base.searchParams.set("lat", lat);
+    base.searchParams.set("lon", lon);
+    base.searchParams.set("networks", "dpcn-calabria");
+    base.searchParams.set("stationDetails","true");
+    base.searchParams.set("allStationProducts","false");
+    const res = await fetch(base.toString(), {cache:"no-store"});
+    if (!res.ok) throw new Error("MeteoHub "+res.status);
+    const js=await res.json();
+    const list = Array.isArray(js)? js : (js.stations || js.data || js.results || []);
+    if (!list.length) return null;
+    // prendi la stazione più vicina
+    let best=null,bd=1e9;
+    for (const st of list){
+      const la=toNum(st.lat ?? st.latitude), lo=toNum(st.lon ?? st.longitude);
+      if (!isFinite(la)||!isFinite(lo)) continue;
+      const d2=(la-lat)*(la-lat)+(lo-lon)*(lo-lon);
+      if (d2<bd){ bd=d2; best=st; }
+    }
+    if (!best) return null;
+    const T  = getProd(best,"B12101");
+    const RH = getProd(best,"B13003");
+    const WS = getProd(best,"B11002");
+    const WG = getProd(best,"B11041") || getProd(best,"B11042");
+    const RR = getProd(best,"B13011");
+
+    const rh = lastVal(RH);
+    const ws = toKmH(lastVal(WS), WS?.unit);
+    const wg = toKmH(lastVal(WG), WG?.unit);
+    const rain = rainTodayCalc(series(RR));
+
+    return {rh, ws, wg, rain};
+  }
+
+  // Hook sul popup: aggiorna i campi con i dati MeteoHub in tempo reale
+  var mapObj = window.map || window.mymap || window.MAP || window.leafmap || window.__leaflet_map;
+  if (!mapObj && window.L && L?.map){
+    // prova a recuperare il primo map creato
+    for (const k in window){ if (window[k] && window[k] instanceof L.Map){ mapObj = window[k]; break; } }
+  }
+  if (!mapObj) return;
+
+  mapObj.on('popupopen', async function(e){
+    try{
+      const marker = e.popup._source;
+      if (!marker || !marker.getLatLng) return;
+      const latlng = marker.getLatLng();
+      const data = await fetchAround(latlng.lat, latlng.lng);
+      if (!data) return;
+      const div = e.popup.getElement()?.querySelector('.leaflet-popup-content');
+      if (!div) return;
+      let html = div.innerHTML;
+      function rep(label, value, suffix){
+        const re = new RegExp("("+label+"\\s*:\\s*)([^<]*)");
+        html = html.replace(re, function(_,p1){ return p1 + (value!=null && !isNaN(value) ? (suffix==="%"? value.toFixed(0)+suffix : value.toFixed(suffix==="mm"?1:0)+" "+(suffix||"")).trim() : "--"); });
+      }
+      rep("Umidità", data.rh, "%");
+      // Vento/Raffica riga combinata
+      html = html.replace(/(Vento:\s*)([^<]*)(\s*\/\s*Raffica:\s*)([^<]*)/, function(){
+        const v = (data.ws!=null && !isNaN(data.ws)) ? data.ws.toFixed(0)+" km/h" : "--";
+        const g = (data.wg!=null && !isNaN(data.wg)) ? data.wg.toFixed(0)+" km/h" : "--";
+        return "Vento: "+v+" / Raffica: "+g;
+      });
+      rep("Pioggia", data.rain, "mm");
+      div.innerHTML = html;
+    }catch(err){
+      console.warn("Popup MeteoHub enrich error:", err);
+    }
+  });
+})();
+</scr"+"ipt>
+
+
+<script>
+// === Estensione: aggiorna anche il pannello testuale in basso quando si apre un popup ===
+(function(){
+  function replaceInBlock(el, data){
+    if (!el) return;
+    let html = el.innerHTML;
+    function rep(label, value, suffix){
+      const re = new RegExp("("+label+"\\s*:\\s*)([^<]*)", "i");
+      html = html.replace(re, function(_,p1){ return p1 + (value!=null && !isNaN(value) ? (suffix==="%"? value.toFixed(0)+suffix : value.toFixed(suffix==="mm"?1:0)+" "+(suffix||"")).trim() : "--"); });
+    }
+    // riga vento/raffica
+    html = html.replace(/(Vento:\s*)([^<]*)(\s*\/\s*Raffica:\s*)([^<]*)/i, function(){
+      const v = (data.ws!=null && !isNaN(data.ws)) ? data.ws.toFixed(0)+" km/h" : "--";
+      const g = (data.wg!=null && !isNaN(data.wg)) ? data.wg.toFixed(0)+" km/h" : "--";
+      return "Vento: "+v+" / Raffica: "+g;
+    });
+    rep("Umidità", data.rh, "%");
+    rep("Pioggia", data.rain, "mm");
+    el.innerHTML = html;
+  }
+
+  function updatePanelForName(name, data){
+    if (!name || !data) return;
+    const root = document.body;
+    // Cerca blocchi che contengono il nome della stazione
+    const nodes = Array.from(root.querySelectorAll("*"))
+      .filter(n => n.children.length===0 && n.textContent && n.textContent.indexOf(name) !== -1)
+      .map(n => n.parentElement);
+    const uniq = new Set();
+    for (const el of nodes){
+      if (!el) continue;
+      if (uniq.has(el)) continue;
+      uniq.add(el);
+      replaceInBlock(el, data);
+    }
+  }
+
+  // Hook sullo stesso evento del popup (se definito dallo script precedente)
+  var mapObj = window.map || window.mymap || window.MAP || window.leafmap || window.__leaflet_map;
+  if (!mapObj && window.L && L?.map){
+    for (const k in window){ if (window[k] && window[k] instanceof L.Map){ mapObj = window[k]; break; } }
+  }
+  if (!mapObj) return;
+
+  mapObj.on('popupopen', function(e){
+    const popupEl = e.popup.getElement()?.querySelector('.leaflet-popup-content');
+    if (!popupEl) return;
+    const title = popupEl.querySelector('div, b, strong, h1, h2, h3, h4');
+    const name = (title ? title.textContent : popupEl.textContent).split("\\n")[0].trim();
+    // L'altro script ha già fatto la fetch e aggiornato il popup; intercettiamo i valori già presenti
+    // se disponibili. In caso contrario, lasciamo al primo script fare la fetch e poi rileggiamo dopo 800ms.
+    setTimeout(function(){
+      const text = popupEl.textContent;
+      const rx = {
+        rh: /Umidità:\s*([0-9]+)%/i,
+        ws: /Vento:\s*([0-9]+)\s*km\/h/i,
+        wg: /Raffica:\s*([0-9]+)\s*km\/h/i,
+        rain: /Pioggia:\s*([0-9]+(?:\.[0-9]+)?)\s*mm/i
+      };
+      const data = {
+        rh: rx.rh.test(text)? Number(text.match(rx.rh)[1]) : null,
+        ws: rx.ws.test(text)? Number(text.match(rx.ws)[1]) : null,
+        wg: rx.wg.test(text)? Number(text.match(rx.wg)[1]) : null,
+        rain: rx.rain.test(text)? Number(text.match(rx.rain)[1]) : null
+      };
+      updatePanelForName(name, data);
+    }, 900);
+  });
+})();
+</scr"+"ipt>
+
+</body></html>`;
         const blob = new Blob([html],{type:'text/html'});
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel='noopener'; a.style.display='none'; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 3000);
@@ -10678,6 +10894,222 @@ const name = st.name
 })();
 </script>
 <!-- === /One-Decimal Sanitizer === -->
+
+
+<!-- === MLG: FIX MeteoHub popup enrichment (humidity, wind, gusts, rain) === -->
+<script>
+(function(){
+  if (!window.L) return;
+
+  function pad(n){return String(n).padStart(2,'0');}
+  function fmtUTC(d){
+    return d.getUTCFullYear()+"-"+pad(d.getUTCMonth()+1)+"-"+pad(d.getUTCDate())+" "+pad(d.getUTCHours())+":"+pad(d.getUTCMinutes());
+  }
+  function toNum(v){const n=Number(v); return isFinite(n)?n:null;}
+  function getPool(st){return st?.prod || st?.products || st?.var || st?.variables || st;}
+  function getProd(st, code){
+    const P=getPool(st); if(!P) return null;
+    if (Array.isArray(P)) return P.find(p => String(p.var||p.code||"").toUpperCase()===String(code).toUpperCase()) || null;
+    if (typeof P==="object") return P[code] || P[String(code)] || null;
+    return null;
+  }
+  function series(prod){
+    const raw = prod?.val ?? prod?.values ?? prod?.series ?? prod;
+    const out=[];
+    if (Array.isArray(raw)){
+      for (const r of raw){
+        if (r && typeof r==="object" && "val" in r){
+          out.push({val: Number(r.val), time: r.ref || r.reftime || r.time || r.ts});
+        }
+      }
+    }
+    return out.filter(x => isFinite(x.val));
+  }
+  function todayOnly(s){
+    const d=new Date(); const y=d.getUTCFullYear(), m=d.getUTCMonth()+1, dd=d.getUTCDate();
+    const k = y+"-"+String(m).padStart(2,'0')+"-"+String(dd).padStart(2,'0');
+    return (s||[]).filter(p=>p.time && String(p.time).slice(0,10)===k).sort((a,b)=> new Date(a.time)-new Date(b.time));
+  }
+  function rainTodayCalc(seriesAll){
+    const s=todayOnly(seriesAll);
+    if(!s.length) return 0;
+    // cumulata non decrescente -> differenza
+    let nonDec=true;
+    for(let i=1;i<s.length;i++){ if (s[i].val < s[i-1].val - 1e-6){ nonDec=false; break; } }
+    if (nonDec) return Math.max(0, s[s.length-1].val - s[0].val);
+    // incrementale -> somma
+    let sum=0; for(const p of s){ if (p.val >= 0) sum+=p.val; }
+    return sum;
+  }
+  function lastVal(prod){
+    const s=series(prod); if (s.length) return s[s.length-1].val;
+    const v=Number(prod?.val); return isFinite(v)? v : null;
+  }
+  function toKmH(value, unit){
+    if (value==null || isNaN(value)) return null;
+    const u=(unit||"").toUpperCase();
+    if (u.includes("M/S")) return value*3.6;
+    if (u.includes("KM/H")||u.includes("KMH")) return value;
+    if (u.includes("KT") || u.includes("KNOT")) return value*1.852;
+    return value<60 ? value*3.6 : value; // fallback prudente
+  }
+
+  function buildQuery(){
+    const now=new Date(), from=new Date(now.getTime()-36*3600*1000);
+    return (
+      "reftime: >="+fmtUTC(from)+",<="+fmtUTC(now)+";"+
+      "timerange:254,0,0 or 1,0,3600;"+
+      "level:103,2000,0,0 or 1,0,0,0 or 103,10000,0,0;"+
+      "license:CCBY_COMPLIANT;"+
+      "product:B12101 or B13003 or B11002 or B11001 or B11041 or B11042 or B13011"
+    );
+  }
+
+  async function fetchAround(lat, lon){
+    const base = new URL("https://meteohub.agenziaitaliameteo.it/api/observations");
+    base.searchParams.set("q", buildQuery());
+    base.searchParams.set("lat", lat);
+    base.searchParams.set("lon", lon);
+    base.searchParams.set("networks", "dpcn-calabria");
+    base.searchParams.set("stationDetails","true");
+    base.searchParams.set("allStationProducts","false");
+    const res = await fetch(base.toString(), {cache:"no-store"});
+    if (!res.ok) throw new Error("MeteoHub "+res.status);
+    const js=await res.json();
+    const list = Array.isArray(js)? js : (js.stations || js.data || js.results || []);
+    if (!list.length) return null;
+    // prendi la stazione più vicina
+    let best=null,bd=1e9;
+    for (const st of list){
+      const la=toNum(st.lat ?? st.latitude), lo=toNum(st.lon ?? st.longitude);
+      if (!isFinite(la)||!isFinite(lo)) continue;
+      const d2=(la-lat)*(la-lat)+(lo-lon)*(lo-lon);
+      if (d2<bd){ bd=d2; best=st; }
+    }
+    if (!best) return null;
+    const T  = getProd(best,"B12101");
+    const RH = getProd(best,"B13003");
+    const WS = getProd(best,"B11002");
+    const WG = getProd(best,"B11041") || getProd(best,"B11042");
+    const RR = getProd(best,"B13011");
+
+    const rh = lastVal(RH);
+    const ws = toKmH(lastVal(WS), WS?.unit);
+    const wg = toKmH(lastVal(WG), WG?.unit);
+    const rain = rainTodayCalc(series(RR));
+
+    return {rh, ws, wg, rain};
+  }
+
+  // Hook sul popup: aggiorna i campi con i dati MeteoHub in tempo reale
+  var mapObj = window.map || window.mymap || window.MAP || window.leafmap || window.__leaflet_map;
+  if (!mapObj && window.L && L?.map){
+    // prova a recuperare il primo map creato
+    for (const k in window){ if (window[k] && window[k] instanceof L.Map){ mapObj = window[k]; break; } }
+  }
+  if (!mapObj) return;
+
+  mapObj.on('popupopen', async function(e){
+    try{
+      const marker = e.popup._source;
+      if (!marker || !marker.getLatLng) return;
+      const latlng = marker.getLatLng();
+      const data = await fetchAround(latlng.lat, latlng.lng);
+      if (!data) return;
+      const div = e.popup.getElement()?.querySelector('.leaflet-popup-content');
+      if (!div) return;
+      let html = div.innerHTML;
+      function rep(label, value, suffix){
+        const re = new RegExp("("+label+"\\s*:\\s*)([^<]*)");
+        html = html.replace(re, function(_,p1){ return p1 + (value!=null && !isNaN(value) ? (suffix==="%"? value.toFixed(0)+suffix : value.toFixed(suffix==="mm"?1:0)+" "+(suffix||"")).trim() : "--"); });
+      }
+      rep("Umidità", data.rh, "%");
+      // Vento/Raffica riga combinata
+      html = html.replace(/(Vento:\s*)([^<]*)(\s*\/\s*Raffica:\s*)([^<]*)/, function(){
+        const v = (data.ws!=null && !isNaN(data.ws)) ? data.ws.toFixed(0)+" km/h" : "--";
+        const g = (data.wg!=null && !isNaN(data.wg)) ? data.wg.toFixed(0)+" km/h" : "--";
+        return "Vento: "+v+" / Raffica: "+g;
+      });
+      rep("Pioggia", data.rain, "mm");
+      div.innerHTML = html;
+    }catch(err){
+      console.warn("Popup MeteoHub enrich error:", err);
+    }
+  });
+})();
+</script>
+
+
+<script>
+// === Estensione: aggiorna anche il pannello testuale in basso quando si apre un popup ===
+(function(){
+  function replaceInBlock(el, data){
+    if (!el) return;
+    let html = el.innerHTML;
+    function rep(label, value, suffix){
+      const re = new RegExp("("+label+"\\s*:\\s*)([^<]*)", "i");
+      html = html.replace(re, function(_,p1){ return p1 + (value!=null && !isNaN(value) ? (suffix==="%"? value.toFixed(0)+suffix : value.toFixed(suffix==="mm"?1:0)+" "+(suffix||"")).trim() : "--"); });
+    }
+    // riga vento/raffica
+    html = html.replace(/(Vento:\s*)([^<]*)(\s*\/\s*Raffica:\s*)([^<]*)/i, function(){
+      const v = (data.ws!=null && !isNaN(data.ws)) ? data.ws.toFixed(0)+" km/h" : "--";
+      const g = (data.wg!=null && !isNaN(data.wg)) ? data.wg.toFixed(0)+" km/h" : "--";
+      return "Vento: "+v+" / Raffica: "+g;
+    });
+    rep("Umidità", data.rh, "%");
+    rep("Pioggia", data.rain, "mm");
+    el.innerHTML = html;
+  }
+
+  function updatePanelForName(name, data){
+    if (!name || !data) return;
+    const root = document.body;
+    // Cerca blocchi che contengono il nome della stazione
+    const nodes = Array.from(root.querySelectorAll("*"))
+      .filter(n => n.children.length===0 && n.textContent && n.textContent.indexOf(name) !== -1)
+      .map(n => n.parentElement);
+    const uniq = new Set();
+    for (const el of nodes){
+      if (!el) continue;
+      if (uniq.has(el)) continue;
+      uniq.add(el);
+      replaceInBlock(el, data);
+    }
+  }
+
+  // Hook sullo stesso evento del popup (se definito dallo script precedente)
+  var mapObj = window.map || window.mymap || window.MAP || window.leafmap || window.__leaflet_map;
+  if (!mapObj && window.L && L?.map){
+    for (const k in window){ if (window[k] && window[k] instanceof L.Map){ mapObj = window[k]; break; } }
+  }
+  if (!mapObj) return;
+
+  mapObj.on('popupopen', function(e){
+    const popupEl = e.popup.getElement()?.querySelector('.leaflet-popup-content');
+    if (!popupEl) return;
+    const title = popupEl.querySelector('div, b, strong, h1, h2, h3, h4');
+    const name = (title ? title.textContent : popupEl.textContent).split("\\n")[0].trim();
+    // L'altro script ha già fatto la fetch e aggiornato il popup; intercettiamo i valori già presenti
+    // se disponibili. In caso contrario, lasciamo al primo script fare la fetch e poi rileggiamo dopo 800ms.
+    setTimeout(function(){
+      const text = popupEl.textContent;
+      const rx = {
+        rh: /Umidità:\s*([0-9]+)%/i,
+        ws: /Vento:\s*([0-9]+)\s*km\/h/i,
+        wg: /Raffica:\s*([0-9]+)\s*km\/h/i,
+        rain: /Pioggia:\s*([0-9]+(?:\.[0-9]+)?)\s*mm/i
+      };
+      const data = {
+        rh: rx.rh.test(text)? Number(text.match(rx.rh)[1]) : null,
+        ws: rx.ws.test(text)? Number(text.match(rx.ws)[1]) : null,
+        wg: rx.wg.test(text)? Number(text.match(rx.wg)[1]) : null,
+        rain: rx.rain.test(text)? Number(text.match(rx.rain)[1]) : null
+      };
+      updatePanelForName(name, data);
+    }, 900);
+  });
+})();
+</script>
 
 </body>
 
