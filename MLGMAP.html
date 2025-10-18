@@ -52,10 +52,7 @@
       // Patch Leaflet tile generation if Leaflet is present
       if (window.L && L.TileLayer && L.TileLayer.prototype && typeof L.TileLayer.prototype.getTileUrl === "function"){
         var orig = L.TileLayer.prototype.getTileUrl;
-        L.TileLayer.prototype.getTileUrl = function(coords){
-          var u = orig.call(this, coords);
-          return addBust(u);
-        };
+        /* Override TileLayer rimosso (performance) */
       }
 
       // Observe later-added nodes and bust their src/href
@@ -4133,10 +4130,7 @@ map.on('click', function(e) {
   lastTap = currentTime;
 });
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 18,
-  attribution: '&copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'
-}).addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {attribution: '&copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'}).addTo(map);
 
 function getColor(temp) {
   if (temp <= -10) return "#00008B";
@@ -7726,18 +7720,7 @@ window.calcolaTop10 = function(){
   };
 
   // after screenshot created, adjust overlay style class
-  const observer = new MutationObserver(muts=>{
-       muts.forEach(m=>{
-          m.addedNodes.forEach(node=>{
-             if(node.id==='screenshotOverlay' && node.style){
-                node.classList.add('top10-overlay');
-                node.style.position='absolute';
-                node.style.left='auto';
-             }
-          });
-       });
-  });
-  observer.observe(document.body,{childList:true,subtree:true});
+  /* Performance fix: MutationObserver disabilitato */
 })();
 </script>
 
