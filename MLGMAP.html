@@ -52,7 +52,10 @@
       // Patch Leaflet tile generation if Leaflet is present
       if (window.L && L.TileLayer && L.TileLayer.prototype && typeof L.TileLayer.prototype.getTileUrl === "function"){
         var orig = L.TileLayer.prototype.getTileUrl;
-        /* Override TileLayer rimosso (performance) */
+        L.TileLayer.prototype.getTileUrl = function(coords){
+          var u = orig.call(this, coords);
+          return addBust(u);
+        };
       }
 
       // Observe later-added nodes and bust their src/href
@@ -4046,6 +4049,17 @@ var map = L.map("map", {
   gestureHandling: true,
   zoomControl: false
 });
+/* === Safe shim: avoid crashes if leaflet-gesture-handling JS isn't loaded === */
+try {
+  if (!map.gestureHandling) {
+    map.gestureHandling = {
+      enable: function(){ /* no-op */ },
+      disable: function(){ /* no-op */ }
+    };
+  }
+} catch (e) { /* ignore */ }
+/* === /shim === */
+
 
 map.on('popupopen', function (e) {
   map.gestureHandling.disable();
@@ -4130,7 +4144,10 @@ map.on('click', function(e) {
   lastTap = currentTime;
 });
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {attribution: '&copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'}).addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 18,
+  attribution: '&copy; <a href="http://openstreetmap.org">OpenStreetMap</a> contributors'
+}).addTo(map);
 
 function getColor(temp) {
   if (temp <= -10) return "#00008B";
@@ -7720,7 +7737,18 @@ window.calcolaTop10 = function(){
   };
 
   // after screenshot created, adjust overlay style class
-  /* Performance fix: MutationObserver disabilitato */
+  const observer = new MutationObserver(muts=>{
+       muts.forEach(m=>{
+          m.addedNodes.forEach(node=>{
+             if(node.id==='screenshotOverlay' && node.style){
+                node.classList.add('top10-overlay');
+                node.style.position='absolute';
+                node.style.left='auto';
+             }
+          });
+       });
+  });
+  observer.observe(document.body,{childList:true,subtree:true});
 })();
 </script>
 
@@ -11544,6 +11572,112 @@ const name = st.name
 })();
 </script>
 <!-- === /MeteoHub BULK adapter v5 === -->
+
+<!-- === Patch: Enrich MH markers on sidebar clicks (UR / RAF / MM) === -->
+<script id="mh-enrich-on-sidebar-2025-10-19">
+(function(){
+  if (window.__mh_enrich_sidebar__) return;
+  window.__mh_enrich_sidebar__ = true;
+
+  // Reuse global fetchAround from the popup integration
+  const fetchAround = window.fetchAround;
+  if (typeof fetchAround !== "function") {
+    console.warn("[MH enrich] fetchAround non disponibile; patch inattiva.");
+    return;
+  }
+
+  function isMH(stationId){
+    return typeof stationId === "string" && stationId.startsWith("MH_");
+  }
+
+  function getMap(){
+    return window.mymap || window.map || (window.L && window.L.mapInstance);
+  }
+
+  function getVisibleMHRows(){
+    const map = getMap();
+    const rows = Array.isArray(window.datiTabella) ? window.datiTabella : [];
+    const mh = rows.filter(r => isMH(r.stationId));
+    if (!map || !map.getBounds) return mh;
+    try {
+      const b = map.getBounds().pad(0.15);
+      return mh.filter(r => {
+        const mk = window.markersById && window.markersById[r.stationId];
+        if (!mk || !mk.getLatLng) return true;
+        const ll = mk.getLatLng();
+        return ll.lat >= b.getSouth() && ll.lat <= b.getNorth() &&
+               ll.lng >= b.getWest()  && ll.lng <= b.getEast();
+      });
+    } catch(_) { return mh; }
+  }
+
+  async function enrichRows(fields){
+    const rows = getVisibleMHRows();
+    if (!rows.length) return;
+
+    const markerMap = window.markersById || Object.create(null);
+    const MAX_CONC = 6;
+    let idx = 0, active = 0;
+
+    return new Promise(resolve => {
+      function step(){
+        if (idx >= rows.length && active === 0) { resolve(); return; }
+        while (active < MAX_CONC && idx < rows.length){
+          const r = rows[idx++];
+          const mk = markerMap[r.stationId];
+          if (!mk || !mk.getLatLng){ continue; }
+          active++;
+          const ll = mk.getLatLng();
+          (async()=>{
+            try{
+              const d = await fetchAround(ll.lat, ll.lng);
+              if (d){
+                if (fields.pioggia && Number.isFinite(+d.rain))   r.pioggia = +d.rain;
+                if (fields.umidita && Number.isFinite(+d.rh))     r.umidita = +d.rh;
+                if (fields.vento   && Number.isFinite(+d.ws))     r.vento   = +d.ws;
+                if (fields.raffica && Number.isFinite(+d.wg))     r.raffica = +d.wg;
+              }
+            }catch(e){ /* silenzioso */ }
+            finally { active--; step(); }
+          })();
+        }
+      }
+      step();
+    });
+  }
+
+  function wrapView(name, fields){
+    const orig = window[name];
+    if (typeof orig !== "function" || orig.__mhWrapped) return;
+    window[name] = async function(){
+      try{
+        await enrichRows(fields);
+      }catch(_){}
+      const res = orig.apply(this, arguments);
+      return res;
+    };
+    window[name].__mhWrapped = true;
+  }
+
+  // Wrap the three sidebar views
+  wrapView('visualizzaUmidita', { umidita:true });
+  wrapView('visualizzaRaffiche', { raffica:true, vento:true });
+  wrapView('visualizzaPioggia',  { pioggia:true });
+
+  // Also handle keyboard or programmatic calls done before the functions are defined
+  const tryLater = setInterval(()=>{
+    wrapView('visualizzaUmidita', { umidita:true });
+    wrapView('visualizzaRaffiche', { raffica:true, vento:true });
+    wrapView('visualizzaPioggia',  { pioggia:true });
+    if (window.visualizzaUmidita?.__mhWrapped &&
+        window.visualizzaRaffiche?.__mhWrapped &&
+        window.visualizzaPioggia?.__mhWrapped){
+      clearInterval(tryLater);
+    }
+  }, 300);
+
+})();
+</script>
 </html>
 <script>
 function aggiornaPopupConEstremi(marker, stazione) {
