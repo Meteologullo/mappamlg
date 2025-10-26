@@ -1215,6 +1215,73 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
 }
 </style>
 
+
+<style id="mlg-rad-sat-restore-buttons">
+/* === Ripristina due pulsanti separati "Rad" e "Sat" ed elimina il menu hamburger === */
+.leaflet-control.mlg-radar-control,
+.leaflet-control.mlg-sat-control{ display: block !important; }
+.leaflet-control.mlg-rad-sat-control{ display: none !important; }
+</style>
+
+
+<style id="mlg-rad-sat-match-toolbar">
+/* === Rendere i pulsanti RAD/SAT identici agli altri della toolbar laterale === */
+
+/* wrapper: stessa "colonna", niente sfondo, stesso gap */
+.leaflet-control.mlg-radar-control,
+.leaflet-control.mlg-sat-control{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  width: calc(var(--ctl-size) + 12px) !important;
+  margin-top: var(--ctl-gap, 6px) !important;
+}
+
+/* stile bottone identico (come .meteo-toolbar .sb-btn) */
+.leaflet-control.mlg-radar-control .sb-btn,
+.leaflet-control.mlg-sat-control .sb-btn{
+  width: var(--ctl-size) !important;
+  height: var(--ctl-size) !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(0,0,0,.10) !important;
+  background: rgba(255,255,255,.88) !important;
+  color:#0f172a !important;
+  display: grid !important;
+  place-items: center !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  font-weight: 900 !important;
+  font-size: 13px !important;
+  padding: 0 !important;
+  box-shadow: 0 6px 18px rgba(0,0,0,.12), inset 0 0 0 1px rgba(255,255,255,.35) !important;
+  text-shadow: 0 1px 0 rgba(255,255,255,.55) !important;
+  transition: transform .08s ease, filter .15s ease, background .15s ease !important;
+  overflow: hidden !important;
+}
+
+/* stati hover/active uguali */
+.leaflet-control.mlg-radar-control .sb-btn:hover,
+.leaflet-control.mlg-sat-control .sb-btn:hover{
+  transform: translateY(-1px) !important;
+  filter: brightness(1.03) !important;
+}
+.leaflet-control.mlg-radar-control .sb-btn:active,
+.leaflet-control.mlg-sat-control .sb-btn:active{
+  transform: translateY(0) !important;
+}
+
+/* testo uniforme (RAD/SAT centrati) */
+.leaflet-control.mlg-radar-control .sb-btn .label,
+.leaflet-control.mlg-sat-control .sb-btn .label,
+.leaflet-control.mlg-radar-control .sb-btn span,
+.leaflet-control.mlg-sat-control .sb-btn span{
+  display:block !important;
+  width:100% !important;
+  text-align:center !important;
+  line-height:1 !important;
+}
+</style>
+
 </head>
 <body>
 
@@ -3746,45 +3813,7 @@ function refreshUi(){
 })();
 </script>
 
-<script id="mlg-rad-sat-combined-js">
-(function(){
-  if(!window.L || !window._mlgMap) return;
-  var map = window._mlgMap;
-  var Control = L.Control.extend({
-    options:{position:'topleft'},
-    onAdd:function(){
-      var w = L.DomUtil.create('div','leaflet-control mlg-rad-sat-control');
-      w.style.position='relative';
-      var b = L.DomUtil.create('button','sb-btn small',w);
-      b.type='button'; b.title='Radar / Satellite'; b.setAttribute('aria-label','Radar o Satellite');
-      b.innerHTML = '<svg class="menu-ic" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">' +
-        '<rect x="2" y="3" width="12" height="2" rx="1"/>' +
-        '<rect x="2" y="7" width="12" height="2" rx="1"/>' +
-        '<rect x="2" y="11" width="12" height="2" rx="1"/>' +
-        '</svg>';
-      var m = L.DomUtil.create('div','menu',w);
-      m.innerHTML = '<button type="button" data-act="rad">Radar</button>' +
-                    '<button type="button" data-act="sat">Sat</button>';
-      function toggleMenu(ev){ L.DomEvent.stop(ev); m.classList.toggle('open'); }
-      L.DomEvent.on(b,'click', toggleMenu);
-      L.DomEvent.on(m,'click', function(ev){
-        L.DomEvent.stop(ev);
-        var t = ev.target && ev.target.closest('button');
-        if(!t) return;
-        var act = t.getAttribute('data-act');
-        if(act==='rad' && window.MLG_RADAR){ window.MLG_RADAR.toggle(); }
-        if(act==='sat' && window.MLG_SAT){ window.MLG_SAT.toggle(); }
-        m.classList.remove('open');
-      });
-      L.DomEvent.on(document,'click', function(){ m.classList.remove('open'); });
-      L.DomEvent.disableClickPropagation(w);
-      L.DomEvent.disableScrollPropagation(w);
-      return w;
-    }
-  });
-  map.addControl(new Control());
-})();
-</script>
+
 
 
 <script id="mlg-watermark-sat-toggle-shim">
