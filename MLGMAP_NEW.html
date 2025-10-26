@@ -1053,6 +1053,168 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
   pointer-events: none !important;
 }
 </style>
+
+
+
+<!-- *** MOBILE FIX v4 (DINAMICO) BEGIN *** -->
+<style id="mlg-mobile-toolbar-fit">
+/* Dimensionamento dinamico tramite clamp() e vmin:
+   - minimo 22px per non diventare troppo piccoli
+   - massimo 36px per non esagerare su telefoni grandi
+   - scala con la dimensione più piccola dello schermo (vmin) */
+:root{
+  --ctl-size: clamp(22px, 6vmin, 36px);
+  --ctl-font: clamp(8.5px, 1.9vmin, 12px);
+  --ctl-gap: clamp(2px, 0.7vmin, 6px);
+  --ctl-pad: clamp(2px, 0.6vmin, 6px);
+  --ctl-scale-label: clamp(0.78, 1vmin, 0.95);
+  --ctl-rad-sat-factor: 0.68; /* Rad/Sat un po' più piccoli */
+}
+
+/* Applico le variabili alla toolbar senza rompere lo stile desktop */
+.leaflet-control.meteo-toolbar{ gap: var(--ctl-gap) !important; padding: var(--ctl-pad) !important; }
+.leaflet-control.meteo-toolbar .leaflet-bar a,
+.leaflet-control.meteo-toolbar a,
+.leaflet-control.meteo-toolbar button,
+.meteo-toolbar .sb-btn{
+  width: var(--ctl-size) !important;
+  height: var(--ctl-size) !important;
+  padding: 0 clamp(2px, 0.5vmin, 5px) !important;
+  font-size: var(--ctl-font) !important;
+  line-height: 1.05 !important;
+}
+
+/* Etichette testuali dei pulsanti (min/max/%/Rad/Sat) */
+.leaflet-control.meteo-toolbar .sb-btn .label,
+.leaflet-control.meteo-toolbar .label,
+.leaflet-control.meteo-toolbar .text,
+.leaflet-control.meteo-toolbar span,
+.leaflet-control.meteo-toolbar small{
+  display: inline-block;
+  transform: scale(var(--ctl-scale-label));
+  transform-origin: center;
+  letter-spacing: 0.1px;
+  white-space: normal;
+  text-align: center;
+}
+
+/* Icone SVG dentro i tasti: riduci un filo così non toccano i bordi */
+.leaflet-control.meteo-toolbar svg{
+  width: 72% !important;
+  height: 72% !important;
+}
+
+/* Rad e Sat un pelo più compatti del resto */
+.mlg-radar-control .sb-btn,
+.mlg-sat-control .sb-btn,
+.leaflet-control.meteo-toolbar .mlg-radar-control a,
+.leaflet-control.meteo-toolbar .mlg-sat-control a{
+  width: calc(var(--ctl-size) * var(--ctl-rad-sat-factor)) !important;
+  height: calc(var(--ctl-size) * var(--ctl-rad-sat-factor)) !important;
+  font-size: calc(var(--ctl-font) * 0.95) !important;
+}
+
+/* Per schermi davvero stretti o bassi impostiamo solo limiti diversi, mantenendo la dinamica */
+@media (max-width: 360px){
+  :root{ --ctl-size: clamp(20px, 6.6vmin, 30px); --ctl-font: clamp(8px, 1.8vmin, 11px); }
+}
+@media (max-height: 630px){
+  :root{ --ctl-size: clamp(20px, 5.6vmin, 30px); }
+}
+</style>
+<!-- *** MOBILE FIX v4 (DINAMICO) END *** -->
+
+
+<!-- *** READABILITY OVER SAT (BEGIN) *** -->
+<style id="mlg-readability-over-sat">
+/* Migliora la leggibilità delle etichette testuali sopra le mappe scure/satellite.
+   Applica un "halo" (text-shadow + stroke sottile) solo all'area dei controlli in alto a destra,
+   dove di solito mostri "Temperatura live" e simili. Non altera i pulsanti. */
+.leaflet-top .leaflet-right .leaflet-control,
+.leaflet-top .leaflet-right .leaflet-control *{
+  color: #fff !important;
+  text-shadow:
+    0 0 2px rgba(0,0,0,.85),
+    0 0 4px rgba(0,0,0,.75),
+    0 1px 2px rgba(0,0,0,.85) !important;
+  -webkit-text-stroke: .35px rgba(0,0,0,.6);
+}
+
+/* Se il titolo è reso dentro elementi semplici (span/div) aggiungi un leggero pannellino
+   dietro al testo quando il contenuto è breve, senza spostare layout. */
+.leaflet-top .leaflet-right .leaflet-control span,
+.leaflet-top .leaflet-right .leaflet-control .title,
+.leaflet-top .leaflet-right .leaflet-control .label{
+  background: rgba(0,0,0,.25);
+  padding: 2px 6px;
+  border-radius: 8px;
+  backdrop-filter: blur(1.5px) saturate(1.1);
+}
+
+/* Mantieni sottile su desktop molto ampi */
+@media (min-width: 1024px){
+  .leaflet-top .leaflet-right .leaflet-control,
+  .leaflet-top .leaflet-right .leaflet-control *{
+    -webkit-text-stroke: .25px rgba(0,0,0,.55);
+    text-shadow:
+      0 0 2px rgba(0,0,0,.8),
+      0 1px 2px rgba(0,0,0,.7) !important;
+  }
+}
+</style>
+<!-- *** READABILITY OVER SAT (END) *** -->
+
+
+<style id="mlg-rad-sat-combined-css">
+/* Nascondi i due controlli originali (non rimuoviamo logica JS) */
+.leaflet-control.mlg-radar-control,
+.leaflet-control.mlg-sat-control { display: none !important; }
+
+/* Nuovo controllo unico (bianco come gli altri) */
+.leaflet-control.mlg-rad-sat-control{ width: var(--ctl-size); display:flex; justify-content:center; }
+.mlg-rad-sat-control .sb-btn{
+  height: calc(var(--ctl-size) * var(--ctl-rad-sat-factor));
+  min-width: calc(var(--ctl-size) * var(--ctl-rad-sat-factor));
+  border-radius: 9999px; /* ovale come gli altri */
+  border: 1px solid rgba(0,0,0,.15);
+  padding: 0 8px; /* crea la forma a capsula pur senza testo */
+  display: inline-flex; align-items:center; justify-content:center;
+  background: #fff; color:#111827; font-weight:800; line-height:1;
+  box-shadow: 0 6px 18px rgba(0,0,0,.12), inset 0 0 0 1px rgba(255,255,255,.30);
+}
+/* l'icona si adatta automaticamente all'altezza del bottone */
+.mlg-rad-sat-control .sb-btn svg{ height:62%; width:auto; display:block; }
+
+.mlg-rad-sat-control .sb-btn .menu-ic{ width:14px; height:14px; opacity:.85; }
+.mlg-rad-sat-control .menu{
+  position:absolute; left: calc(100% + 6px); top:0;
+  display:none; flex-direction:column; gap:6px;
+  background:#fff; border:1px solid rgba(0,0,0,.12); border-radius:12px;
+  padding:6px; box-shadow:0 8px 20px rgba(0,0,0,.14); z-index:1000;
+}
+.mlg-rad-sat-control .menu.open{ display:flex; }
+.mlg-rad-sat-control .menu button{
+  appearance:none; border:0; border-radius:10px; padding:8px 10px; font-weight:800;
+  cursor:pointer; white-space:nowrap; line-height:1; color:#fff;
+}
+.mlg-rad-sat-control .menu button[data-act="rad"]{ background:#16a34a; }
+.mlg-rad-sat-control .menu button[data-act="sat"]{ background:#0ea5e9; }
+</style>
+
+
+<style id="mlg-watermark-sat-boost">
+/* Quando il Satellite è attivo, aumenta leggermente la visibilità del watermark */
+.mlg-sat-on #map .mlg-watermark::after{
+  content:"";
+  position:absolute; inset:0;
+  pointer-events:none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='420' height='280'><defs><pattern id='p2' width='240' height='160' patternUnits='userSpaceOnUse' patternTransform='rotate(-20)'><text x='0' y='60' font-family='system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial, sans-serif' font-weight='900' font-size='64' fill='%230b2f86' fill-opacity='0.24'>MLG</text></pattern></defs><rect width='100%%' height='100%%' fill='url(%23p2)'/></svg>");
+  background-size: 420px 280px;
+  mix-blend-mode: multiply;
+  z-index: 1;
+}
+</style>
+
 </head>
 <body>
 
@@ -3579,7 +3741,76 @@ function refreshUi(){
     });
     map.addControl(new Control());
   })();
+
+  window.MLG_SAT = SAT;
 })();
 </script>
+
+<script id="mlg-rad-sat-combined-js">
+(function(){
+  if(!window.L || !window._mlgMap) return;
+  var map = window._mlgMap;
+  var Control = L.Control.extend({
+    options:{position:'topleft'},
+    onAdd:function(){
+      var w = L.DomUtil.create('div','leaflet-control mlg-rad-sat-control');
+      w.style.position='relative';
+      var b = L.DomUtil.create('button','sb-btn small',w);
+      b.type='button'; b.title='Radar / Satellite'; b.setAttribute('aria-label','Radar o Satellite');
+      b.innerHTML = '<svg class="menu-ic" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">' +
+        '<rect x="2" y="3" width="12" height="2" rx="1"/>' +
+        '<rect x="2" y="7" width="12" height="2" rx="1"/>' +
+        '<rect x="2" y="11" width="12" height="2" rx="1"/>' +
+        '</svg>';
+      var m = L.DomUtil.create('div','menu',w);
+      m.innerHTML = '<button type="button" data-act="rad">Radar</button>' +
+                    '<button type="button" data-act="sat">Sat</button>';
+      function toggleMenu(ev){ L.DomEvent.stop(ev); m.classList.toggle('open'); }
+      L.DomEvent.on(b,'click', toggleMenu);
+      L.DomEvent.on(m,'click', function(ev){
+        L.DomEvent.stop(ev);
+        var t = ev.target && ev.target.closest('button');
+        if(!t) return;
+        var act = t.getAttribute('data-act');
+        if(act==='rad' && window.MLG_RADAR){ window.MLG_RADAR.toggle(); }
+        if(act==='sat' && window.MLG_SAT){ window.MLG_SAT.toggle(); }
+        m.classList.remove('open');
+      });
+      L.DomEvent.on(document,'click', function(){ m.classList.remove('open'); });
+      L.DomEvent.disableClickPropagation(w);
+      L.DomEvent.disableScrollPropagation(w);
+      return w;
+    }
+  });
+  map.addControl(new Control());
+})();
+</script>
+
+
+<script id="mlg-watermark-sat-toggle-shim">
+(function(){
+  function install(){
+    if(!window.MLG_SAT || window.MLG_SAT.__wmPatched) return;
+    var orig = window.MLG_SAT.toggle;
+    if(typeof orig !== 'function') return;
+    var state = false;
+    window.MLG_SAT.toggle = function(){
+      var r = orig.apply(this, arguments);
+      state = !state; // assumiamo 'toggle'
+      var root = document.documentElement;
+      root.classList.toggle('mlg-sat-on', state);
+      document.body && document.body.classList.toggle('mlg-sat-on', state);
+      return r;
+    };
+    window.MLG_SAT.__wmPatched = true;
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', install);
+  }else{
+    install();
+  }
+})();
+</script>
+
 </body>
 </html>
