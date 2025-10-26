@@ -1282,6 +1282,42 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
 }
 </style>
 
+
+<style id="mlg-rad-sat-mobile-fix">
+/* === Mobile: testo uguale ai pulsanti MIN/MAX === */
+@media (max-width: 640px){
+  .leaflet-control.mlg-radar-control .sb-btn,
+  .leaflet-control.mlg-sat-control .sb-btn{
+    font-size: 11px !important; /* stesso corpo dei pulsanti 'min' e 'max' */
+    border-radius: 10px !important;
+  }
+}
+</style>
+
+
+<style id="mlg-rad-sat-mobile-fix-v2">
+/* Mobile: testo ancora più piccolo e uguale a 'min'/'max' */
+@media (max-width: 768px){
+  .leaflet-control.mlg-radar-control .sb-btn,
+  .leaflet-control.mlg-sat-control .sb-btn{
+    font-size: 9px !important;   /* ridotto */
+    line-height: 1 !important;
+    letter-spacing: 0 !important;
+    text-transform: lowercase !important; /* come 'min'/'max' */
+    padding: 0 !important;
+    white-space: nowrap !important; /* niente a capo */
+  }
+  /* assicura che la dimensione del bottone non cresca */
+  .leaflet-control.mlg-radar-control .sb-btn .label,
+  .leaflet-control.mlg-sat-control .sb-btn .label,
+  .leaflet-control.mlg-radar-control .sb-btn span,
+  .leaflet-control.mlg-sat-control .sb-btn span{
+    font-size: inherit !important;
+    line-height: inherit !important;
+  }
+}
+</style>
+
 </head>
 <body>
 
@@ -3553,7 +3589,7 @@ function refreshUi(){
   z-index:10000; pointer-events:auto;
 }
 @media (max-width: 640px){
-    #radar-controls{ padding:4px 5px; top: 64px; right:6px;  overflow:visible; position:relative;}
+    #radar-controls{ padding:4px 5px; top: 64px; right:6px;  overflow:visible; position:fixed;}
     #radarSlider{ width: 100px; }
   }
 </style>
