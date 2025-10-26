@@ -4,7 +4,7 @@
 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Meteo Lo Gullo — Pill piccole ottimizzate (V19)</title>
+<title>MLG MAP - Mappa dati in tempo reale</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
 <style>
   :root{--brand:#1e5bff;}
@@ -291,7 +291,7 @@ iframe.webcam-preview[src*="webcam_spiaggia_pulita"]{
 @media (max-width: 520px){
   .leaflet-popup-content-wrapper,
   .leaflet-popup-tip{
-    max-width: 240px;
+    max-width: 280px;
     padding: 4px;
   }
   .leaflet-popup-content{
@@ -300,6 +300,11 @@ iframe.webcam-preview[src*="webcam_spiaggia_pulita"]{
     margin: 4px 6px !important;
   }
 }
+</style>
+
+<style id="mlg-popup-overflow-fix">
+/* Evita il taglio dell'ultima parola (es. "km/h") nei popup */
+.leaflet-popup-content{ overflow: visible !important; }
 </style>
 
 <style>
@@ -677,6 +682,377 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
 </style>
 
 
+
+<style id="mlg-loading-css">
+#mlgLoadingOverlay{
+  position:fixed; inset:0; z-index:9999;
+  display:flex; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.35);
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  pointer-events:all; /* blocca interazioni */
+}
+#mlgLoadingOverlay .card{
+  background:rgba(17,24,39,.88); color:#fff;
+  border-radius:14px; padding:14px 16px;
+  border:1px solid rgba(255,255,255,.18);
+  box-shadow:0 10px 30px rgba(0,0,0,.35);
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  font-weight:800;
+}
+#mlgLoadingOverlay .spinner{
+  width:28px; height:28px; border-radius:50%;
+  border:3px solid rgba(255,255,255,.35); border-top-color:#fff;
+  animation:mlgspin .8s linear infinite;
+}
+@keyframes mlgspin{ to { transform: rotate(360deg); } }
+</style>
+
+
+<style id="mlg-logo-nointeract">
+/* Disabilita interazioni col logo nell'angolo */
+#map .mlg-corner-logo{
+  cursor: default !important;
+}
+#map .mlg-corner-logo, 
+#map .mlg-watermark{
+  -webkit-touch-callout: none;
+  -webkit-user-select: none; -moz-user-select: none; user-select: none;
+}
+</style>
+
+
+<style id="mlg-extra-ui-css-v3">
+/* --- Overlays interni alla mappa, minimal, visibili SOLO quando il paint è ON --- */
+#map{ position: relative; }
+/* Top-right info (senza box bianchi) */
+#map .mlg-top-info{
+  position:absolute; z-index:660; right: 10px; top: 10px;
+  display:flex; flex-direction:column; gap:2px; align-items:flex-end;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+  line-height:1.1;
+  pointer-events:none;
+  opacity:0; transform:translateY(-4px);
+  transition:.18s ease;
+}
+#map.paint-on .mlg-top-info{ opacity:1; transform:none; }
+#map .mlg-top-info .line{
+  font-weight:800; font-size:12px; color:#0b1320;
+  text-shadow: 0 1px 2px rgba(255,255,255,.75), 0 0 1px rgba(255,255,255,.7);
+  letter-spacing:.2px; white-space:nowrap;
+}
+#map .mlg-top-info .line.small{ font-weight:600; font-size:11px; opacity:.9; }
+
+/* Color scale in-map, bottom-right, stretta, nessun riquadro */
+#map .mlg-color-scale{
+  position:absolute; z-index:660; right: 10px;
+  bottom: calc(34px + env(safe-area-inset-bottom, 0px)); /* sopra l'attribuzione Leaflet */
+  display:flex; flex-direction:column; align-items:flex-end; gap:2px;
+  pointer-events:none; opacity:0; transform:translateY(4px);
+  transition:.18s ease;
+}
+#map.paint-on .mlg-color-scale{ opacity:1; transform:none; }
+#map .mlg-color-scale .bar{
+  width: min(42vw, 210px);
+  height: 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(0,0,0,.25);
+  box-shadow: 0 1px 2px rgba(255,255,255,.65), inset 0 0 0 0 rgba(0,0,0,0);
+}
+#map .mlg-color-scale .ticks{
+  display:flex; width: min(42vw, 210px);
+  justify-content:space-between; font-size:10px; font-weight:700;
+  color:#0b1320;
+  text-shadow: 0 1px 2px rgba(255,255,255,.75), 0 0 1px rgba(255,255,255,.7);
+}
+#map .mlg-color-scale .caption{
+  font-size:11px; font-weight:800; color:#0b1320;
+  text-shadow: 0 1px 2px rgba(255,255,255,.75), 0 0 1px rgba(255,255,255,.7);
+}
+
+/* Safety: quando la modalità paint è OFF, forza i marker visibili */
+#map:not(.paint-on) .leaflet-pane.leaflet-marker-pane{
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+</style>
+
+
+<!-- === MLG Info Button & Modal === -->
+<style id="mlg-info-styles">
+  #map #mlgInfoBtn{
+    position:absolute;
+    right:18px;
+    bottom:18px;
+    width:46px;
+    height:46px;
+    border-radius:12px;
+    border:none;
+    background:#ffffff;
+    color:#111;
+    font-weight:700;
+    font-size:22px;
+    line-height:46px;
+    text-align:center;
+    box-shadow:0 6px 16px rgba(0,0,0,.18);
+    cursor:pointer;
+    z-index:10050;
+  }
+  #map #mlgInfoBtn:active{ transform: translateY(1px); }
+  .mlg-modal{
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.45);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+    z-index:20000;
+  }
+  .mlg-modal.open{ display:flex; }
+  body.mlg-modal-open{ overflow:hidden; }
+  .mlg-modal__card{
+    width:min(820px, 92vw);
+    max-height:86vh;
+    overflow:auto;
+    background:#fff;
+    border-radius:18px;
+    box-shadow:0 24px 60px rgba(0,0,0,.35);
+    padding:18px 20px 20px;
+  }
+  .mlg-modal__header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    margin-bottom:12px;
+    padding-bottom:8px;
+    border-bottom:1px solid rgba(0,0,0,.08);
+  }
+  .mlg-modal__title{
+    font-size:18px;
+    font-weight:700;
+    margin:0;
+  }
+  .mlg-modal__close{
+    border:none;
+    background:transparent;
+    font-size:26px;
+    line-height:1;
+    cursor:pointer;
+    padding:6px 8px;
+  }
+  .mlg-modal__body{
+    font-size:15px;
+    line-height:1.6;
+  }
+  .mlg-modal__body p{ margin:0 0 10px 0; }
+  .mlg-modal__body ul{ margin:8px 0 12px 22px; }
+  .mlg-modal__footer{
+    display:flex;
+    justify-content:flex-end;
+    margin-top:14px;
+  }
+  .mlg-button{
+    border:none;
+    background:#1a73e8;
+    color:#fff;
+    border-radius:10px;
+    padding:10px 12px;
+    font-weight:600;
+    cursor:pointer;
+    box-shadow:0 4px 10px rgba(26,115,232,.3);
+  }
+</style>
+
+<!-- OVERRIDE: mostra il box in alto anche con i marker; nasconde "MLG plotting" a paint OFF -->
+<style id="mlg-topinfo-override">
+  #map .mlg-top-info{ opacity:1 !important; transform:none !important; }
+  #map:not(.paint-on) .mlg-top-info .line:first-child{ display:none !important; }
+</style>
+
+
+
+
+<style id="mlg-info-style-override">
+  #map #mlgInfoBtn{
+    position:absolute;
+    right:10px !important;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 34px) !important;
+    padding:8px 10px !important;
+    height:auto !important;
+    width:auto !important;
+    border-radius:10px !important;
+    background:#d93025 !important;
+    color:#fff !important;
+    font-size:12.5px !important;
+    font-weight:700 !important;
+    line-height:1.1 !important;
+    display:inline-flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    box-shadow:0 4px 12px rgba(217,48,37,.28) !important;
+    white-space:nowrap !important;
+    letter-spacing:.2px !important;
+    z-index:10020 !important;
+  }
+  @media (max-width: 430px){
+    #map #mlgInfoBtn{ 
+      font-size:11.5px !important; 
+      padding:7px 9px !important; 
+      right:10px !important; 
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 30px) !important; 
+    }
+  }
+
+  /* transizione & stato "sparito" */
+  #map #mlgInfoBtn{ transition: opacity .3s ease, transform .3s ease; }
+  #map #mlgInfoBtn.mlg-vanish{ opacity:0; pointer-events:none; transform: translateY(4px); }
+</style>
+
+
+
+
+
+
+
+
+
+
+
+<style id="mlg-plot-numbers-css">
+.leaflet-pane.mlg-label-pane{ z-index: 625 !important; }
+#map.paint-on .leaflet-pane.mlg-label-pane{ opacity:1; pointer-events:auto; }
+#map:not(.paint-on) .leaflet-pane.mlg-label-pane{ opacity:0; pointer-events:none; }
+
+.leaflet-marker-icon.mlg-plot-label,
+.leaflet-div-icon.mlg-plot-label{ 
+  background:transparent; border:none; transform: translate(-50%, -50%);
+}
+
+/* ultra-micro plotting numbers */
+.mlg-plot-num{
+  display:inline-block;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial, sans-serif;
+  font-weight: 800;
+  font-size: 7px;     /* davvero piccoli su mobile */
+  line-height: 1;
+  letter-spacing: 0;
+  color:#0b1320;
+  text-shadow: 0 1px 1px rgba(255,255,255,.93);
+  user-select:none;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+  padding: 0;
+}
+@media (min-width: 768px){
+  .mlg-plot-num{ font-size: 8px; }  /* micro su desktop */
+}
+</style>
+
+
+
+
+
+
+
+
+
+<style id="rad-button-narrow-green">
+/* === Fix stile pulsante "Rad": stessa larghezza dei pulsanti laterali e colore verde === */
+.mlg-radar-control .sb-btn{
+  width: var(--ctl-size) !important;
+  height: var(--ctl-size) !important;
+  border-radius: 12px !important;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(0,0,0,.10) !important;
+  background: #16a34a !important;      /* verde */
+  color: #ffffff !important;            /* testo bianco per contrasto */
+  box-shadow: 0 6px 18px rgba(0,0,0,.12), inset 0 0 0 1px rgba(255,255,255,.30) !important;
+  text-shadow: none !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+}
+</style>
+
+<style id="satellite-button-style">
+/* Stessa geometria dei pulsanti laterali */
+.mlg-sat-control .sb-btn{
+  width: var(--ctl-size) !important;
+  height: var(--ctl-size) !important;
+  border-radius: 12px !important;
+  padding: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  border: 1px solid rgba(0,0,0,.10) !important;
+  background: #0ea5e9 !important; /* azzurro per differenziarlo dal verde Radar */
+  color: #ffffff !important;
+  font-weight: 900 !important;
+  line-height: 1 !important;
+  box-shadow: 0 6px 18px rgba(0,0,0,.12), inset 0 0 0 1px rgba(255,255,255,.30) !important;
+}
+</style>
+
+
+
+<style id="rad-sat-group-sm">
+/* Pulsanti 'Rad' e 'Sat' più piccoli e uniti come gruppo */
+.mlg-radar-control .sb-btn,
+.mlg-sat-control .sb-btn{
+  width: calc(var(--ctl-size) * .78) !important;
+  height: calc(var(--ctl-size) * .78) !important;
+}
+
+/* Contenitori delle due control: stessa larghezza della barra e centrate */
+.mlg-radar-control,
+.mlg-sat-control{
+  width: var(--ctl-size) !important;            /* uguale agli altri controlli */
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+}
+
+/* Unisci visivamente i due controlli (stack) */
+.mlg-radar-control{ margin-bottom: 0 !important; }
+.mlg-sat-control{ margin-top: -6px !important; } /* elimina gap */
+
+/* Angoli condivisi */
+.mlg-radar-control .sb-btn{
+  border-bottom-left-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+.mlg-sat-control .sb-btn{
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-top: 0 !important;
+}
+</style>
+
+<style id="wm-keep-on-top">
+/* Mantieni sempre visibile eventuale watermark */
+#mlg-watermark, .mlg-watermark{
+  position: relative;
+  z-index: 2000 !important;
+  pointer-events: none;
+}
+</style>
+
+<style id="wm-keep-on-top-strong">
+/* Tutti i controlli Leaflet sopra ai tile */
+.leaflet-control-container,
+.leaflet-top,
+.leaflet-bottom{
+  z-index: 1500 !important;
+}
+
+/* Watermark/overlay brand sempre al top */
+#mlg-watermark, .mlg-watermark, .watermark, [class*="watermark"]{
+  position: absolute !important;
+  z-index: 1600 !important;
+  pointer-events: none !important;
+}
+</style>
 </head>
 <body>
 
@@ -716,7 +1092,10 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
 </div>
 <div class="temp-labels"><span>-10</span><span>0</span><span>10</span><span>20</span><span>30</span><span>40+</span></div>
 
-<div id="map"><div class="mlg-watermark" aria-hidden="true"></div><a class="mlg-corner-logo" href="https://www.meteologullo.com/" target="_blank" rel="noopener" aria-label="MLG logo"><img src="https://meteologullo.github.io/mappamlg/logo.png" alt="MLG"></a></div>
+<div id="map"><div class="mlg-watermark" aria-hidden="true"></div><a class="mlg-corner-logo" href="https://www.meteologullo.com/" target="_blank" rel="noopener" aria-label="MLG logo"><img src="https://meteologullo.github.io/mappamlg/logo.png" alt="MLG"></a>
+  <!-- Info button -->
+  <button id="mlgInfoBtn" aria-label="Informazioni sulla mappa" title="Informazioni">Informazioni importanti</button>
+</div>
 
 <div id="rankingWrap">
   <div id="rankingCard">
@@ -1113,7 +1492,7 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
     return base;
   }
 function bubbleMarker(st){
-    var m = L.marker([st.lat, st.lon], {icon: bubbleIcon(st.t)});
+    var m = L.marker([st.lat, st.lon], {icon: bubbleIcon(st.t)}); try{m.__isStation=true;}catch(e){};
     m.bindPopup(buildPopupHTML(st));
     return m;
   }
@@ -1319,6 +1698,47 @@ function bubbleMarker(st){
     var progress = CENTERS.map(function(c){ return {name:c.name, color:c.color, count:0, variant:"--"}; });
     updateLegend(progress);
 
+    // === AVVIO PARALLELO: WUnderground subito (patch) ===
+    var centersDone = false, wuDone = false;
+    function __doneIfBoth(){
+      try{ if (centersDone && wuDone){ statusEl.textContent = ""; if (window.renderRanking) window.renderRanking(); } }catch(_){}
+    }
+    (function startWUImmediately(){
+      try{
+        fetchWUAll().then(async function(wu){
+          try{
+            if (wu && wu.list && window.__stationProgress){
+              window.__stationProgress.incExpected(wu.list.length);
+            }
+          }catch(_){}
+          if (wu && wu.list){
+            for (const st of wu.list){
+              const m = bubbleMarker(st).addTo(map);
+              try{
+                if (window.fetchDailyExtremes && st.id){
+                  const ex = await window.fetchDailyExtremes(st.id);
+                  if (ex){
+                    if (ex.min != null) st.tMin = ex.min;
+                    if (ex.max != null) st.tMax = ex.max;
+                    try{ m.setPopupContent(buildPopupHTML(st)); }catch(_){}
+                    try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){}
+                  }
+                }
+              }catch(_){}
+            }
+          }
+          try{
+            var pill = '<span class="pill"><span class="dot" style="background:'+WU_COLOR+'"></span><b>WUnderground PWS</b>: '+(wu && (wu.count||0))+' stazioni</span>';
+            var el = document.getElementById('note');
+            if (el) el.innerHTML = el.innerHTML + pill;
+          }catch(_){}
+        }).catch(function(_err){ /* silenzio */ }).finally(function(){ wuDone = true; __doneIfBoth(); });
+      }catch(_){ wuDone = true; __doneIfBoth(); }
+    })();
+    // === FINE AVVIO PARALLELO WU ===
+
+
+
     pMap(CENTERS, function(c){
       return fetchForCenter(c, fromStr, toStr).then(function(r){
         var norm = (r.list||[]).map(function(x){ var n = normalize(x); if(!n.name || String(n.name).trim()==='' || String(n.name).trim().toLowerCase()==='stazione'){ n.name = r.center && r.center.name ? r.center.name : n.name; } return n; });
@@ -1338,7 +1758,7 @@ function bubbleMarker(st){
       }
     }).then(function(){
       fetchWUAll().then(async function(wu){
-        if (wu.list && wu.list.length){ console.debug("[WU][EXT] stations ready:", wu.list.length);
+        if (wu.list && wu.list.length){ try{ if (window.__stationProgress) window.__stationProgress.incExpected(wu.list.length); }catch(_){} console.debug("[WU][EXT] stations ready:", wu.list.length);
           for (const st of wu.list){ console.debug("[WU][EXT] station:", st.id, st.label);
             const m = bubbleMarker(st).addTo(map);
             try{
@@ -1347,7 +1767,7 @@ function bubbleMarker(st){
                 if (ex && (ex.min!=null || ex.max!=null)){
                   st.tMin = (ex.min!=null ? ex.min : st.tMin);
                   st.tMax = (ex.max!=null ? ex.max : st.tMax);
-                  m.setPopupContent(buildPopupHTML(st));
+                  m.setPopupContent(buildPopupHTML(st)); try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){ }
                 }
               }
             }catch(e){ console.warn("WU extremes update", st.id, e); }
@@ -1367,6 +1787,25 @@ function bubbleMarker(st){
 
   
   /* ======== SIDEBAR & MODI DI VISUALIZZAZIONE ======== */
+  // --- Schedulatore leggero per riapplicare automaticamente il "modo" attivo ai nuovi marker ---
+  // Non tocca la logica originale: debounce e un controllo di sicurezza se _applyMode non è ancora definita.
+  window.__scheduleApplyMode = (function(){
+    var _t = null;
+    return function(){
+      try{ if(_t) clearTimeout(_t); }catch(_){}
+      _t = setTimeout(function(){
+        try{
+          if (typeof _applyMode === 'function'){
+            _applyMode(_currentMode);
+          }else{
+            // se _applyMode non è ancora disponibile (prima parte del boot), riprova una volta dopo poco
+            setTimeout(function(){ try{ if (typeof _applyMode==='function') _applyMode(_currentMode); }catch(_){ } }, 120);
+          }
+        }catch(_){}
+      }, 60);
+    };
+  })();
+
   // Registry dei marker/stazioni senza toccare la logica originale
   window.__ALL_MARKERS = window.__ALL_MARKERS || [];
   var __origBubbleMarker = bubbleMarker;
@@ -1384,6 +1823,7 @@ function bubbleMarker(st){
     m.__station = st; window.__ALL_MARKERS.push(m);
   }catch(_){}
   try{ if(window.__scheduleRanking) window.__scheduleRanking(); }catch(_){}
+  try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){ }
   return m;
 };
 
@@ -1523,7 +1963,7 @@ if (hide){ if (map.hasLayer(m)) map.removeLayer(m); continue; }
           var mode = this.dataset.mode;
           if (mode === 'refresh'){
             window.__ALL_MARKERS.length = 0; // reset registry, i nuovi marker verranno reinseriti dall'hook
-            document.getElementById('reload').click();
+            window.location.href = "https://www.meteologullo.com/stazioni-meteorologiche-mlg";
           }else{
             _applyMode(mode);
           }
@@ -2058,8 +2498,8 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
       this._canvas = L.DomUtil.create('canvas', 'melt-canvas leaflet-zoom-animated', this._pane);
       this._ctx = this._canvas.getContext('2d', { willReadFrequently:true });
       // offscreen per IDW
-      this._off = document.createElement('canvas');
-      this._offCtx = this._off.getContext('2d', { willReadFrequently:true });
+      this._offscreen = document.createElement('canvas');
+      this._offscreenCtx = this._offscreen.getContext('2d', { willReadFrequently:true });
       L.DomEvent.disableClickPropagation(this._canvas);
       this._attach();
       this._reset();
@@ -2067,7 +2507,7 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
     onRemove: function(map){
       this._detach();
       if(this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
-      this._canvas = null; this._ctx=null; this._map=null; this._off=null; this._offCtx=null;
+      this._canvas=null; this._ctx=null; this._map=null; this._offscreen=null; this._offscreenCtx=null;
     },
     _attach: function(){
       var m=this._map;
@@ -2095,7 +2535,7 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
       this._canvas.width = w; this._canvas.height = h;
       this._canvas.style.width = size.x + 'px'; this._canvas.style.height = size.y + 'px';
       // offscreen
-      this._off.width = w; this._off.height = h;
+      this._offscreen.width = w; this._offscreen.height = h;
       this._scheduleDraw();
     },
     _scheduleDraw: function(){
@@ -2104,9 +2544,9 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
       this._raf = requestAnimationFrame(function(){ self._draw(); });
     },
     _draw: function(){
-      var off = this._offCtx, ctx=this._ctx;
+      var off = this._offscreenCtx, ctx=this._ctx;
       if(!off || !ctx) return;
-      var w=this._off.width, h=this._off.height, ratio=this._ratio||1;
+      var w = this._offscreen.width, h = this._offscreen.height, ratio=this._ratio||1;
       off.clearRect(0,0,w,h); ctx.clearRect(0,0,w,h);
 
       var samples = collectStations();
@@ -2157,7 +2597,7 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
       // ora clip su MAIN e disegna l'offscreen (drawImage è CLIPPABILE)
       ctx.save();
       buildRegionPath(ctx, ratio);
-      ctx.drawImage(this._off, 0, 0);  // tagliato ai confini
+      ctx.drawImage(this._offscreen, 0, 0);  // tagliato ai confini
       ctx.restore();
     }
   });
@@ -2197,5 +2637,949 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
 })();
 </script>
 
+
+<script>
+(function(){
+  function showOverlay(){
+    if (document.getElementById('mlgLoadingOverlay')) return;
+    var overlay = document.createElement('div');
+    overlay.id = 'mlgLoadingOverlay';
+    overlay.innerHTML = '<div class="card"><div class="spinner" aria-hidden="true"></div><div>Caricamento…</div></div>';
+    document.body.appendChild(overlay);
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+  }
+  function hideOverlay(){
+    var overlay = document.getElementById('mlgLoadingOverlay');
+    if (overlay){ overlay.remove(); }
+    document.documentElement.style.overflow = '';
+    document.body.style.overflow = '';
+  }
+
+  // Mostra overlay appena possibile
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', showOverlay);
+  } else {
+    showOverlay();
+  }
+
+  // Progress stations
+  var minVisibleMs = 1200;   // minimo di cortesia
+  var maxVisibleMs = 12000;  // anti-blocco
+  var startTs = Date.now();
+  var RATIO = 0.70;          // poco più della metà
+
+  window.__stationProgress = {
+    added: 0,
+    expected: 0,
+    incExpected: function(n){ this.expected += (Number(n)||0); this.check(); },
+    onAddOne: function(){ this.added++; this.check(); },
+    check: function(){
+      // non nascondere prima del minimo
+      var elapsed = Date.now() - startTs;
+      var reached = (this.expected>0) && (this.added >= Math.ceil(this.expected * RATIO));
+      if ((reached && elapsed >= minVisibleMs) || elapsed >= maxVisibleMs){
+        hideOverlay();
+        // disattiva ulteriori controlli
+        this.check = function(){};
+      }
+    }
+  };
+
+  // 1) marca i marker "station" e conta l'aggiunta in mappa
+  var __origBubbleMarker = window.bubbleMarker;
+  if (typeof __origBubbleMarker === 'function'){
+    window.bubbleMarker = function(st){
+      var m = __origBubbleMarker(st);
+      try{ m.__isStation = true; }catch(_){};
+      return m;
+    };
+  }
+  // 2) intercetta l'addTo dei MARKER per incrementare "added"
+  (function(){
+    if (window.L && L.Marker && L.Marker.prototype){
+      var _origAddTo = L.Marker.prototype.addTo;
+      L.Marker.prototype.addTo = function(map){
+        var res = _origAddTo.call(this, map);
+        try{ if (this.__isStation && window.__stationProgress) window.__stationProgress.onAddOne(); }catch(_){}
+        return res;
+      };
+    }
+  })();
+
+  // 3) avvisa quando sappiamo quante stazioni arriveranno (centri + WU)
+  //    - centri: ogni chiamata a renderStations(stations) ci dà la dimensione del chunk
+  if (typeof window.renderStations === 'function'){
+    var __origRenderStations = window.renderStations;
+    window.renderStations = function(stations){
+      try{ if (window.__stationProgress) window.__stationProgress.incExpected((stations && stations.length) || 0); }catch(_){}
+      return __origRenderStations.apply(this, arguments);
+    };
+  }
+
+  // 4) Fallback: se WU aggiunge altre stazioni, conteggia il totale prima di aggiungerle
+  //    Inseriamo un MutationObserver sul DOM dei <script> inline per agganciare la parte "WU" se presente
+  //    In alternativa, proviamo a patchare dinamicamente quando fetchWUAll() risolve.
+  (function(){
+    var _origFetch = window.fetchWUAll;
+    if (typeof _origFetch === 'function'){
+      window.fetchWUAll = function(){
+        return _origFetch.apply(this, arguments).then(function(wu){
+          try{
+            if (wu && wu.list && wu.list.length && window.__stationProgress){
+              window.__stationProgress.incExpected(wu.list.length);
+            }
+          }catch(_){}
+          return wu;
+        });
+      };
+    }
+  })();
+
+  // Safety: se il codice principale termina senza aggiungere marker, chiudiamo comunque
+  setTimeout(function(){ if (window.__stationProgress) window.__stationProgress.check(); }, 1500);
+})();
+</script>
+
+
+<script>
+(function(){
+  function disableLogoInteractions(){
+    var nodes = Array.prototype.slice.call(document.querySelectorAll('#map .mlg-corner-logo'));
+    nodes.forEach(function(el){
+      try{ el.removeAttribute('href'); }catch(_){}
+      try{ el.setAttribute('tabindex','-1'); el.setAttribute('aria-hidden','true'); }catch(_){}
+      var stopper = function(ev){ ev.preventDefault(); ev.stopPropagation(); return false; };
+      ['click','pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','keydown'].forEach(function(evt){
+        el.addEventListener(evt, stopper, true);
+      });
+    });
+  }
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', disableLogoInteractions);
+  } else {
+    disableLogoInteractions();
+  }
+})();
+</script>
+
+
+<script id="mlg-extra-ui-js-v3">
+(function(){
+  function ensureUi(){
+    var mapEl = document.getElementById('map');
+    if(!mapEl) return null;
+    // Top info
+    var top = mapEl.querySelector('.mlg-top-info');
+    if(!top){
+      top = document.createElement('div');
+      top.className = 'mlg-top-info';
+      top.innerHTML = '<div class="line" style="font-size:13px">MLG plotting</div>' +
+                      '<div class="line" id="mlgTopMode">—</div>' +
+                      '<div class="line small" id="mlgTopWhen">—</div>';
+      mapEl.appendChild(top);
+    }
+    // Color scale
+    var sc = mapEl.querySelector('.mlg-color-scale');
+    if(!sc){
+      sc = document.createElement('div');
+      sc.className = 'mlg-color-scale';
+      sc.innerHTML = '<div class="bar" id="mlgScaleBar"></div>' +
+                     '<div class="ticks"><span id="mlgTickLo">—</span><span id="mlgTickHi">—</span></div>' +
+                     '<div class="caption" id="mlgScaleCaption">Temperatura (°C)</div>';
+      mapEl.appendChild(sc);
+    }
+    return {mapEl:mapEl, top:top, sc:sc};
+  }
+
+  // Gradients
+  var TEMP_STOPS = [
+    {t:-15, h:240, s:85,  l:28},{t:-10, h:225, s:80,  l:32},{t: -5, h:215, s:80,  l:38},
+    {t:  0, h:205, s:80,  l:45},{t:  5, h:195, s:75,  l:50},{t:  8, h:175, s:70,  l:46},
+    {t: 12, h:150, s:70,  l:42},{t: 16, h:130, s:75,  l:44},{t: 19, h:105, s:80,  l:50},
+    {t: 22, h: 65, s:92,  l:54},{t: 25, h: 50, s:95,  l:54},{t: 27, h: 38, s:95,  l:52},
+    {t: 29, h: 28, s:95,  l:50},{t: 32, h: 15, s:95,  l:48},{t: 35, h:  0, s:95,  l:46},
+    {t: 37, h:350, s:92,  l:50},{t: 40, h:335, s:88,  l:55},{t: 43, h:320, s:85,  l:58},
+    {t: 46, h:300, s:80,  l:62},{t: 50, h:285, s:75,  l:66}
+  ];
+  var RH_STOPS   = [{rh:0,h:50,s:85,l:88},{rh:30,h:90,s:75,l:78},{rh:60,h:150,s:70,l:62},{rh:80,h:185,s:75,l:56},{rh:100,h:210,s:80,l:50}];
+  var GUST_STOPS = [{g:0,h:140,s:40,l:88},{g:20,h:120,s:70,l:72},{g:40,h:90,s:85,l:60},{g:70,h:55,s:95,l:56},{g:100,h:15,s:90,l:52},{g:140,h:0,s:90,l:48}];
+  var RAIN_STOPS = [{r:0,h:200,s:60,l:90},{r:5,h:210,s:70,l:82},{r:15,h:225,s:80,l:68},{r:40,h:255,s:85,l:58},{r:80,h:275,s:85,l:50}];
+
+  function hsl(h,s,l){ return 'hsl('+h+','+s+'%,'+l+'%)'; }
+  function gradientFromStops(stops, key){
+    var lo = stops[0][key], hi = stops[stops.length-1][key];
+    var span = hi - lo || 1;
+    var parts = [];
+    for(var i=0;i<stops.length;i++){
+      var s = stops[i];
+      var pct = Math.round(100 * (s[key]-lo)/span);
+      parts.push(hsl(s.h,s.s,s.l)+' '+pct+'%');
+    }
+    return 'linear-gradient(90deg,'+parts.join(',')+')';
+  }
+
+  var MODE_LABELS = {
+    live:'Temperatura live',
+    min:'Temperatura minima',
+    max:'Temperatura massima',
+    rh:'Umidità',
+    gust:'Vento',
+    rain:'Accumulo di pioggia'
+  };
+
+  function getActiveModeFromToolbar(){
+    var b = document.querySelector('.leaflet-control.meteo-toolbar .sb-btn.active[data-mode]');
+    return b ? b.getAttribute('data-mode') : 'live';
+  }
+
+  
+function refreshUi(){
+    ensureUi();
+    var mode = getActiveModeFromToolbar();
+    var elM = document.getElementById('mlgTopMode');
+    var elW = document.getElementById('mlgTopWhen');
+    if(elM) elM.textContent = MODE_LABELS[mode] || '—';
+    if(elW){
+      var now = new Date();
+      if(mode==='min' || mode==='max'){
+        elW.textContent = now.toLocaleDateString('it-IT', { day:'2-digit', month:'2-digit', year:'numeric' });
+      }else{
+        elW.textContent = now.toLocaleString('it-IT', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+      }
+    }
+    var bar = document.getElementById('mlgScaleBar');
+    var cap = document.getElementById('mlgScaleCaption');
+    var tkL = document.getElementById('mlgTickLo');
+    var tkH = document.getElementById('mlgTickHi');
+    if(bar && cap && tkL && tkH){
+      if(mode==='rh'){
+        bar.style.background = gradientFromStops(RH_STOPS,'rh'); cap.textContent='Umidità (%)';
+        tkL.textContent='0%'; tkH.textContent='100%';
+      }else if(mode==='gust'){
+        bar.style.background = gradientFromStops(GUST_STOPS,'g'); cap.textContent='Raffiche (km/h)';
+        tkL.textContent='0'; tkH.textContent='140+';
+      }else if(mode==='rain'){
+        bar.style.background = gradientFromStops(RAIN_STOPS,'r'); cap.textContent='Pioggia (mm, oggi)';
+        tkL.textContent='0'; tkH.textContent='80+';
+      }else{
+        bar.style.background = gradientFromStops(TEMP_STOPS,'t'); cap.textContent='Temperatura (°C)';
+        tkL.textContent='-15'; tkH.textContent='50';
+      }
+    }
+  }
+
+
+  // Mostra overlay SOLO quando il paint è attivo, usando la classe .paint-on su #map
+  function setPaintClass(on){
+    var mapEl = document.getElementById('map');
+    if(!mapEl) return;
+    mapEl.classList.toggle('paint-on', !!on);
+  }
+
+  // Patch robusta del toggle
+  (function(){
+    function hardRestoreMarkers(){
+      try{
+        var mp = (window._mlgMap && window._mlgMap.getPanes && window._mlgMap.getPanes().markerPane) || null;
+        if(mp){ mp.style.opacity=''; mp.style.pointerEvents=''; }
+      }catch(_){}
+    }
+    function afterToggle(isOn){
+      setPaintClass(isOn);
+      hardRestoreMarkers();
+      try{ if (typeof window._applyMode === 'function'){ window._applyMode(getActiveModeFromToolbar()); } }catch(_){}
+      refreshUi();
+    }
+    function wrap(){
+      var p = window.MLG_PAINT;
+      if(p && typeof p.toggle === 'function' && !p.__wrapped){
+        var orig = p.toggle;
+        p.toggle = function(){
+          var on;
+          try{ on = orig.apply(p, arguments); }catch(_){}
+          // Se la toggle non ritorna stato, deduciamo dal DOM
+          if(typeof on === 'undefined'){ on = !!document.getElementById('map').classList.contains('paint-on') ? false : true; }
+          afterToggle(on);
+          return on;
+        };
+        // se esiste p.isOn, usalo per boot
+        if(typeof p.isOn === 'function'){ setPaintClass(!!p.isOn()); }
+        p.__wrapped = true;
+      }
+    }
+    wrap();
+    var tries=0, iv=setInterval(function(){ wrap(); tries++; if(tries>40) clearInterval(iv); }, 200);
+  })();
+
+  // Reagisci ai click della toolbar e aggiorna UI/clock
+  document.addEventListener('click', function(ev){
+    var t = ev.target.closest && ev.target.closest('.leaflet-control.meteo-toolbar .sb-btn');
+    if(t){ setTimeout(refreshUi, 30); }
+  });
+  if (document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', function(){ ensureUi(); refreshUi(); setInterval(refreshUi, 60000); });
+  } else {
+    ensureUi(); refreshUi(); setInterval(refreshUi, 60000);
+  }
+})();
+</script>
+
+
+<!-- Info modal -->
+<div id="mlgInfoModal" class="mlg-modal" aria-hidden="true" role="dialog" aria-labelledby="mlgInfoTitle">
+  <div class="mlg-modal__card" role="document">
+    <div class="mlg-modal__header">
+      <h3 class="mlg-modal__title" id="mlgInfoTitle">Informazioni sulla mappa e sui dati visualizzati</h3>
+      <button class="mlg-modal__close" type="button" aria-label="Chiudi">×</button>
+    </div>
+    
+    <div class="mlg-modal__body">
+      <p><strong>MLGmap</strong> è una piattaforma meteorologica ideata, progettata e sviluppata interamente da <strong>Meteo Lo Gullo (MLG)</strong>, sulla base di idee, criteri e logiche meteorologiche elaborate da <strong>Angelo Lo Gullo</strong>.</p>
+      <p>La struttura, la logica di funzionamento e l’interfaccia della mappa sono state realizzate interamente da Meteo Lo Gullo, senza l’utilizzo di modelli, codici o componenti esterni.
+      Tutte le funzioni di elaborazione, rappresentazione e visualizzazione dei dati sono frutto di un progetto originale e indipendente, che non deriva né dipende da piattaforme di terze parti.</p>
+      <p>L’innovativo sistema di <em>plotting</em> presente in MLGmap, sviluppato interamente da MLG, consente di elaborare e rappresentare in tempo reale i dati provenienti dalle diverse stazioni presenti sulla piattaforma — pubbliche, amatoriali e di proprietà — secondo una logica proprietaria e originale, unica nel panorama meteorologico calabrese.</p>
+      <p><strong>📊 Fonti dei dati</strong></p>
+      <ul>
+        <li><strong>Dati ufficiali</strong>: parte delle informazioni proviene dalla rete di monitoraggio di <strong>ARPACAL – Agenzia Regionale per la Protezione dell’Ambiente della Calabria</strong>, elaborate e distribuite tramite la piattaforma nazionale <strong>Mistral MeteoHub</strong>. Questi dati sono rilasciati con licenza <strong>Creative Commons Attribution 4.0 International (CC BY 4.0)</strong>, che ne consente il riutilizzo a condizione che venga citata la fonte.</li>
+        <li><strong>Rete MLGmap</strong>: la mappa integra anche stazioni meteorologiche di proprietà di Meteo Lo Gullo, che costituiscono la rete ufficiale MLGmap. Chiunque desideri proporre l’aggiunta o la segnalazione di una nuova stazione può contattarci: ogni contributo volto a migliorare la copertura meteorologica della Calabria è ben accetto.</li>
+        <li><strong>Dati amatoriali</strong>: per ampliare la copertura nelle aree meno monitorate, la mappa integra alcune stazioni meteorologiche amatoriali pubblicamente accessibili su reti di condivisione (es. Wunderground e altre piattaforme analoghe), selezionate per la loro attendibilità. Tali stazioni sono mostrate solo a fini informativi e divulgativi, senza alcuna pretesa di proprietà o personalizzazione da parte di MLGmap.</li>
+      </ul>
+      <p><strong>🎯 Finalità e trasparenza</strong></p>
+      <p>Tutti i dati vengono utilizzati esclusivamente a fini informativi e non commerciali, con l’obiettivo di favorire la conoscenza e la condivisione dei dati meteorologici della Regione Calabria.</p>
+      <p>Qualora un proprietario di stazione amatoriale riconosca la propria installazione nella mappa e non desideri che i relativi dati vengano visualizzati, può contattarci: la stazione verrà rimossa tempestivamente.</p>
+    </div>
+
+    <div class="mlg-modal__footer">
+      <button class="mlg-button mlg-close" type="button">Chiudi</button>
+    </div>
+  </div>
+</div>
+
+<script id="mlg-info-script">
+(function(){
+  var btn = document.getElementById('mlgInfoBtn');
+  var modal = document.getElementById('mlgInfoModal');
+  if(!btn || !modal) return;
+  var card = modal.querySelector('.mlg-modal__card');
+  var closeBtn = modal.querySelector('.mlg-modal__close');
+  var closeBtn2 = modal.querySelector('.mlg-close');
+
+  function openModal(){
+    modal.classList.add('open');
+    document.body.classList.add('mlg-modal-open');
+    modal.setAttribute('aria-hidden','false');
+    if(closeBtn){ try { closeBtn.focus({preventScroll:true}); } catch(e){} }
+  }
+  function closeModal(){
+    modal.classList.remove('open');
+    document.body.classList.remove('mlg-modal-open');
+    modal.setAttribute('aria-hidden','true');
+  }
+
+  btn.addEventListener('click', openModal);
+  if(closeBtn) closeBtn.addEventListener('click', closeModal);
+  if(closeBtn2) closeBtn2.addEventListener('click', closeModal);
+  modal.addEventListener('click', function(e){
+    if(!card.contains(e.target)) closeModal();
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && modal.classList.contains('open')) closeModal();
+  });
+})();
+</script>
+
+<script id="mlg-info-autohide">
+(function(){
+  var btn = document.getElementById('mlgInfoBtn');
+  if(!btn) return;
+  setTimeout(function(){
+    if(!btn) return;
+    btn.classList.add('mlg-vanish');
+    // dopo la dissolvenza lo togliamo dal flusso
+    setTimeout(function(){ if(btn) btn.style.display='none'; }, 380);
+  }, 60000); // 60 secondi
+})();
+</script>
+
+
+
+
+
+
+
+
+
+<script id="mlg-plot-numbers-js">
+(function(){
+  var map = window._mlgMap;
+  if(!map || !window.L) return;
+
+  var pane = map.getPane('mlgLabelPane') || map.createPane('mlgLabelPane');
+  pane.classList.add('mlg-label-pane');
+
+  var labels = L.layerGroup([], {pane:'mlgLabelPane'}).addTo(map);
+
+  function isPaintOn(){
+    var el = document.getElementById('map');
+    return !!(el && el.classList.contains('paint-on'));
+  }
+
+  function getMode(){
+    try{
+      var b = document.querySelector('.leaflet-control.meteo-toolbar .sb-btn.active[data-mode]');
+      return b ? b.getAttribute('data-mode') : 'live';
+    }catch(_){ return 'live'; }
+  }
+
+  function getValue(st, mode){
+    if(!st) return null;
+    if(mode==='live') return st.t;
+    if(mode==='min') return st.tMin;
+    if(mode==='max') return st.tMax;
+    if(mode==='rh') return st.rh;
+    if(mode==='gust') return st.wg;
+    if(mode==='rain') return st.rain;
+    return null;
+  }
+
+  function formatValue(v, mode){
+    if(v==null || !isFinite(v)) return '';
+    if(mode==='rh') return String(Math.round(v));
+    if(mode==='gust') return String(Math.round(v));
+    if(mode==='rain') return (Math.round(v*10)/10).toFixed(1);
+    return (Math.round(v*10)/10).toFixed(1);
+  }
+
+  function collectCandidates(mode){
+    var out = [];
+    var all = (window.__ALL_MARKERS || []);
+    for(var i=0;i<all.length;i++){
+      var m = all[i];
+      if(!m || !map.hasLayer(m) || !m.getLatLng) continue;
+      var el = (m.getElement && m.getElement()) || null;
+      if(!el) continue;
+      var chip = el.querySelector ? el.querySelector('.t-chip') : null;
+      if(!chip) continue;
+      var st = m.__station || null;
+      var v = getValue(st, mode);
+      if(v==null || !isFinite(v)) continue;
+      var ll = m.getLatLng();
+      var pt = map.latLngToLayerPoint(ll);
+      out.push({ marker:m, st:st, latlng:ll, x:pt.x, y:pt.y, v:Number(v) });
+    }
+    return out;
+  }
+
+  function median(a){
+    var s=a.slice().sort(function(x,y){return x-y;});
+    var n=s.length; if(!n) return 0;
+    return (n%2)? s[(n-1)/2] : 0.5*(s[n/2-1]+s[n/2]);
+  }
+
+  function rebuildLabels(){
+    labels.clearLayers();
+    if(!isPaintOn()) return;
+
+    var mode = getMode();
+    var cand = collectCandidates(mode);
+    if(!cand.length) return;
+
+    var z = map.getZoom();
+    // micro collision radius e celle piccole per copertura fitta
+    var DISC = (z>=12)? 40 : (z>=11)? 42 : (z>=10)? 44 : (z>=9)? 46 : 48;
+    var CLUS = (z>=12)? 60 : (z>=11)? 62 : (z>=10)? 64 : (z>=9)? 68 : 72;
+    var OFFS = [[0,0],[5,0],[-5,0],[0,5],[0,-5],[5,5],[-5,5],[5,-5],[-5,-5]];
+
+    // stats
+    var vals = cand.map(function(c){ return c.v; });
+    var vmin = Math.min.apply(null, vals);
+    var vmax = Math.max.apply(null, vals);
+    if(!isFinite(vmin) || !isFinite(vmax) || vmin===vmax){ vmin-=1; vmax+=1; }
+    var width = (vmax-vmin)||1;
+    var globMed = median(vals);
+
+    // salienza + centro dei vicini
+    var RAD = (z>=12)? 100 : (z>=11)? 110 : (z>=10)? 120 : 130;
+    for(var i=0;i<cand.length;i++){
+      var c=cand[i], neigh=[], cx=0, cy=0, cnt=0;
+      for(var j=0;j<cand.length;j++){
+        if(i===j) continue;
+        var dx=c.x-cand[j].x, dy=c.y-cand[j].y;
+        var d2=dx*dx+dy*dy;
+        if(d2<=RAD*RAD){ neigh.push(cand[j].v); cx+=cand[j].x; cy+=cand[j].y; cnt++; }
+      }
+      var locMed = neigh.length? median(neigh):globMed;
+      c.sal = Math.abs(c.v - locMed);
+      if(cnt>0){ c.neighCx = cx/cnt; c.neighCy = cy/cnt; } else { c.neighCx = c.x; c.neighCy = c.y; }
+    }
+
+    // più bin per distinguere meglio le macchie
+    var B = (z>=12)? 16 : (z>=11)? 15 : 14;
+    function binIndex(v){
+      var r=(v - vmin)/width;
+      var idx=Math.floor(r*B);
+      if(idx<0) idx=0; if(idx>=B) idx=B-1;
+      return idx;
+    }
+    function keyOf(x,y){ return Math.floor(x/CLUS)+":"+Math.floor(y/CLUS); }
+
+    // Celle con migliore candidato per ogni bin
+    var cells = {};
+    cand.forEach(function(c){
+      var key = keyOf(c.x,c.y);
+      var b = binIndex(c.v);
+      if(!cells[key]) cells[key] = { bestByBin:{}, bins:new Set(), cx:Math.floor(c.x/CLUS), cy:Math.floor(c.y/CLUS) };
+      var cur = cells[key].bestByBin[b];
+      if(!cur || c.sal>cur.sal) cells[key].bestByBin[b]=c;
+      cells[key].bins.add(b);
+    });
+
+    // Placement helpers
+    var placed = [];
+    function collides(x,y){
+      for(var i=0;i<placed.length;i++){
+        var p=placed[i]; var dx=x-p.x, dy=y-p.y;
+        if(dx*dx+dy*dy < DISC*DISC) return true;
+      }
+      return false;
+    }
+    function clampToCell(x,y,c){
+      var cx = Math.floor(c.x/CLUS), cy = Math.floor(c.y/CLUS);
+      var minx = cx*CLUS+2, maxx=(cx+1)*CLUS-2;
+      var miny = cy*CLUS+2, maxy=(cy+1)*CLUS-2;
+      if(x<minx) x=minx; if(x>maxx) x=maxx;
+      if(y<miny) y=miny; if(y>maxy) y=maxy;
+      return {x:x,y:y};
+    }
+    function inwardPreference(c, nx, ny){
+      var d0 = Math.hypot(c.x - c.neighCx, c.y - c.neighCy);
+      var d1 = Math.hypot(nx - c.neighCx, ny - c.neighCy);
+      return d1 <= d0 + 0.1;
+    }
+    function placeCandidate(c){
+      for(var i=0;i<OFFS.length;i++){
+        var ox=OFFS[i][0], oy=OFFS[i][1];
+        var nx=c.x+ox, ny=c.y+oy;
+        var cl = clampToCell(nx, ny, c);
+        nx=cl.x; ny=cl.y;
+        if(!inwardPreference(c, nx, ny)) continue;
+        if(collides(nx,ny)) continue;
+        var latlng = map.layerPointToLatLng(L.point(nx,ny));
+        var html = '<span class="mlg-plot-num">'+ formatValue(c.v, mode) +'</span>';
+        var icon = L.divIcon({className:'mlg-plot-label', html: html});
+        var mk = L.marker(latlng, {icon:icon, pane:'mlgLabelPane', interactive:true});
+        (function(marker, orig){
+          marker.on('click', function(ev){
+            try{ L.DomEvent.stopPropagation(ev); }catch(_){}
+            try{ orig.openPopup(); }catch(_){}
+          });
+        })(mk, c.marker);
+        mk.addTo(labels);
+        placed.push({x:nx,y:ny});
+        return true;
+      }
+      return false;
+    }
+
+    // 1) Estremi forzati: 8 alti + 8 bassi -> non perdiamo minime 10°C, ecc.
+    var topK = (z>=11)? 8 : 7;
+    var bottomK = (z>=11)? 8 : 7;
+    var byHigh = cand.slice().sort(function(a,b){ return b.v - a.v; });
+    var byLow  = cand.slice().sort(function(a,b){ return a.v - b.v; });
+    for(var i=0;i<topK && i<byHigh.length;i++){ placeCandidate(byHigh[i]); }
+    for(var i=0;i<bottomK && i<byLow.length;i++){ placeCandidate(byLow[i]); }
+
+    // 2) Bordi tra macchie (confronti)
+    var neighborOffsets = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+    function neighborKey(key, off){
+      var p = key.split(':'), cx=+p[0], cy=+p[1];
+      return (cx+off[0])+":"+(cy+off[1]);
+    }
+    var already = new Set();
+    for(var key in cells){
+      var cell = cells[key];
+      cell.bins.forEach(function(b){
+        for(var o=0;o<neighborOffsets.length;o++){
+          var nk = neighborKey(key, neighborOffsets[o]);
+          var nb = cells[nk];
+          if(!nb) continue;
+          nb.bins.forEach(function(b2){
+            if(b2===b) return;
+            var tag1 = key+'|'+b, tag2 = nk+'|'+b2;
+            if(!already.has(tag1)){ already.add(tag1); var c1=cell.bestByBin[b]; if(c1) placeCandidate(c1); }
+            if(!already.has(tag2)){ already.add(tag2); var c2=nb.bestByBin[b2]; if(c2) placeCandidate(c2); }
+          });
+        }
+      });
+    }
+
+    // 3) Riempimento dell'interno (copertura quasi completa, una per cella/bin)
+    for(var key in cells){
+      var cell = cells[key];
+      cell.bins.forEach(function(b){
+        var c = cell.bestByBin[b];
+        if(c) placeCandidate(c);
+      });
+    }
+  }
+
+  var _timer=null;
+  function schedule(){ clearTimeout(_timer); _timer = setTimeout(rebuildLabels, 70); }
+
+  map.on('moveend zoomend', schedule);
+  document.addEventListener('click', function(ev){
+    var t = ev.target && ev.target.closest && ev.target.closest('.leaflet-control.meteo-toolbar .sb-btn');
+    if(t){ schedule(); }
+  });
+  try{
+    var markerPane = map.getPanes().markerPane;
+    if(markerPane){
+      var mo = new MutationObserver(schedule);
+      mo.observe(markerPane, { childList:true, subtree:true, attributes:true });
+    }
+  }catch(_){}
+  (function observePaintToggle(){
+    var el = document.getElementById('map');
+    if(!el) return;
+    var mo = new MutationObserver(schedule);
+    mo.observe(el, {attributes:true, attributeFilter:['class']});
+  })();
+
+  setTimeout(rebuildLabels, 180);
+})();
+</script>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- === RADAR RainViewer controls (Calabria) v7 with CSS-based hide === -->
+<style>
+  #radar-controls {
+    position: fixed;
+    top: 66px;
+    right: 8px;
+    z-index: 2147483646;
+    background: rgba(255,255,255,.98);
+    border-radius: 12px;
+    padding: 5px 6px;
+    box-shadow: 0 8px 20px rgba(0,0,0,.16);
+    display: none;
+    font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;
+    color:#0f172a;
+    user-select:none;
+  }
+  #radar-controls .row{ display:flex; align-items:center; gap:6px; }
+  #radar-controls button{
+    border:0; padding:5px 7px; border-radius:8px; font-weight:800; cursor:pointer; font-size:11px; line-height:1; color:#fff;
+  }
+  #radarPlay,#radarStop{ width:30px; height:28px; display:inline-flex; align-items:center; justify-content:center; }
+  #radarPlay{ background:#0284c7; }
+  #radarStop{ background:#dc2626; }
+  #radarSlider{ width: 130px; height: 18px; }
+  .modebtn{ background:#475569; }
+  .modebtn.active{ background:#2563eb; box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.85); }
+  #radar-time-label{ font-size:11px; color:#0f172a; text-align:center; margin-top:4px; font-weight:700; }
+
+  
+
+/* --- Mobile friendly: mini pulsante per comprimere/espandere il pannello --- */
+#radarCollapse{
+  position:absolute; right:6px; bottom:6px;
+  width:22px; height:22px; border-radius:6px;
+  border:0; background:#0f172a; color:#fff; font-weight:900;
+  box-shadow:0 3px 8px rgba(0,0,0,.25);
+  cursor:pointer; line-height:22px; text-align:center;
+  z-index:10000; pointer-events:auto;
+}
+#radarExpand{
+  display:none; position:absolute; right:6px; bottom:6px;
+  width:22px; height:22px; border:0; border-radius:6px;
+  background:#16a34a; color:#fff; font-weight:900; cursor:pointer;
+  line-height:22px; text-align:center;
+  z-index:10000; pointer-events:auto;
+}
+#radar-controls.collapsed{ padding:6px 8px; height:auto; min-height:28px; min-width:28px; position:relative; }
+#radar-controls.collapsed .row, #radar-controls.collapsed #radar-time-label{ display:none; }
+#radar-controls.collapsed #radarCollapse{ display:none; }
+#radar-controls #radarExpand{ display:none; }
+#radar-controls.collapsed #radarExpand{ display:inline-block; }
+#radar-controls.collapsed #radarExpand{
+  display:none; position:absolute; right:6px; bottom:6px;
+  width:22px; height:22px; border:0; border-radius:6px;
+  background:#16a34a; color:#fff; font-weight:900; cursor:pointer;
+  line-height:22px; text-align:center;
+  z-index:10000; pointer-events:auto;
+}
+@media (max-width: 640px){
+    #radar-controls{ padding:4px 5px; top: 64px; right:6px;  overflow:visible; position:relative;}
+    #radarSlider{ width: 100px; }
+  }
+</style>
+<div id="radar-controls" class="leaflet-control">
+  <button id="radarCollapse" title="Comprimi" aria-label="Comprimi pannello">–</button>
+  <div class="row">
+    <button id="radarPlay" title="Play" aria-label="Play">▶</button>
+    <button id="radarStop" title="Stop" aria-label="Stop">■</button>
+    <input id="radarSlider" type="range" min="0" max="0" step="1" value="0" aria-label="Frame radar">
+    <button id="radarBtnPlus" class="modebtn active" title="Radar + marker">R+M</button>
+    <button id="radarBtnSolo" class="modebtn" title="Solo radar">Solo</button>
+  </div>
+  <button id="radarExpand" title="Espandi pannello radar" aria-label="Espandi pannello">▢</button>
+  <div id="radar-time-label" aria-live="polite"></div>
+</div>
+<script id="mlg-radar-calabria">
+(function(){
+  var map = window._mlgMap;
+  if(!map || !window.L) return;
+
+  // CSS-based hide to be robust with any pane/divIcon
+  function ensureHideCss(){
+    var id='mlgHideMarkersCSS';
+    var el=document.getElementById(id);
+    if(!el){
+      el=document.createElement('style');
+      el.id=id;
+      el.textContent = '.leaflet-marker-icon, .leaflet-marker-shadow, .leaflet-overlay-pane .leaflet-marker-icon, .leaflet-pane .leaflet-marker-icon{opacity:0 !important; pointer-events:none !important;}';
+      document.head.appendChild(el);
+    }
+  }
+  function removeHideCss(){
+    var el=document.getElementById('mlgHideMarkersCSS');
+    if(el) el.remove();
+  }
+
+  var RAD = {
+    on:false,
+    hideOn:false,       // default: radar + marker
+    layers:[],
+    times:[],
+    idx:0,
+    timer:null
+  };
+
+  var controls = document.getElementById('radar-controls');
+  try{
+    L.DomEvent.disableClickPropagation(controls);
+    L.DomEvent.disableScrollPropagation(controls);
+  }catch(_){}
+
+  function ensureFrames(cb){
+    if(RAD.layers.length){ cb(); return; }
+    fetch('https://api.rainviewer.com/public/weather-maps.json')
+      .then(r=>r.json()).then(function(data){
+        var host = data.host;
+        RAD.times = (data && data.radar && data.radar.past ? data.radar.past : []).map(function(f){
+          return { path:f.path, time:new Date(f.time*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) };
+        });
+        RAD.layers = RAD.times.map(function(f){
+          return L.tileLayer(host + f.path + '/256/{z}/{x}/{y}/2/1_1.png', {
+            opacity:0.6, zIndex:150, attribution:'&copy; <a href="https://www.rainviewer.com">RainViewer</a>'
+          });
+        });
+        var sl=document.getElementById('radarSlider'); if(sl) sl.max = Math.max(0, RAD.layers.length-1);
+        cb();
+      }).catch(function(err){ console.error('Radar: errore nel fetch', err); });
+  }
+
+  function updateTime(){
+    var lbl=document.getElementById('radar-time-label');
+    if(lbl && RAD.times[RAD.idx]) lbl.textContent = 'Orario radar: ' + RAD.times[RAD.idx].time;
+  }
+
+  function addCurrent(){
+    if(!RAD.layers.length) return;
+    RAD.layers[RAD.idx].addTo(map);
+    updateTime();
+    var sl=document.getElementById('radarSlider'); if(sl) sl.value = RAD.idx;
+  }
+  function removeAll(){ RAD.layers.forEach(function(l){ try{ l.remove(); }catch(_){ } }); }
+
+  function setMode(hideMarkersMode){
+    RAD.hideOn = !!hideMarkersMode;
+    if(RAD.hideOn){ ensureHideCss(); } else { removeHideCss(); }
+    var bPlus = document.getElementById('radarBtnPlus');
+    var bSolo = document.getElementById('radarBtnSolo');
+    if(bPlus && bSolo){
+      if(RAD.hideOn){ bSolo.classList.add('active'); bPlus.classList.remove('active'); }
+      else { bPlus.classList.add('active'); bSolo.classList.remove('active'); }
+    }
+  }
+
+  function start(){
+    controls.style.display='block';
+    RAD.on = true;
+    setMode(false); // default Radar+Marker
+    ensureFrames(function(){
+      RAD.idx = Math.max(0, RAD.layers.length-1); // vai sempre all'ultimo frame disponibile
+      addCurrent();
+    });
+  }
+  function stop(){
+    controls.style.display='none';
+    if(RAD.timer){ clearInterval(RAD.timer); RAD.timer=null; }
+    removeAll();
+    RAD.on=false;
+    removeHideCss();
+  }
+
+  RAD.toggle = function(){
+    if(!RAD.on){ start(); } else { stop(); }
+    return RAD.on;
+  };
+  RAD.play = function(){
+    if(RAD.timer || !RAD.layers.length) return;
+    RAD.timer = setInterval(function(){
+      try{ RAD.layers[RAD.idx].remove(); }catch(_){}
+      RAD.idx = (RAD.idx + 1) % RAD.layers.length;
+      addCurrent();
+    }, 800);
+  };
+  RAD.stop = function(){ if(RAD.timer){ clearInterval(RAD.timer); RAD.timer=null; } };
+
+  RAD.sliderChange = function(v){
+    if(!RAD.layers.length) return;
+    if(RAD.timer){ RAD.stop(); }
+    removeAll();
+    RAD.idx = parseInt(v||0);
+    addCurrent();
+  };
+
+  // Wire UI
+  var btnPlay = document.getElementById('radarPlay');
+  var btnStop = document.getElementById('radarStop');
+  var slider = document.getElementById('radarSlider');
+  var btnPlus = document.getElementById('radarBtnPlus');
+  var btnSolo = document.getElementById('radarBtnSolo');
+  var btnCollapse = document.getElementById('radarCollapse');
+  var btnExpand = document.getElementById('radarExpand');
+
+  function swallow(e){ e.stopPropagation(); e.preventDefault(); }
+
+  if(btnPlay) btnPlay.addEventListener('click', function(e){ swallow(e); RAD.play(); });
+  if(btnStop) btnStop.addEventListener('click', function(e){ swallow(e); RAD.stop(); });
+  if(slider) slider.addEventListener('input', function(e){ swallow(e); RAD.sliderChange(this.value); });
+  if(btnPlus) btnPlus.addEventListener('click', function(e){ swallow(e); setMode(false); });
+  if(btnSolo) btnSolo.addEventListener('click', function(e){ swallow(e); setMode(true); });
+  if(btnCollapse) btnCollapse.addEventListener('click', function(e){ swallow(e); controls.classList.add('collapsed'); });
+  if(btnExpand) btnExpand.addEventListener('click', function(e){ swallow(e); controls.classList.remove('collapsed'); });
+
+  // Add compact "Rad" control
+  (function addControl(){
+    var Control=L.Control.extend({
+      options:{ position:'topleft' },
+      onAdd:function(m){
+        var wrap=L.DomUtil.create('div','leaflet-control mlg-radar-control');
+        var b=L.DomUtil.create('button','sb-btn small',wrap);
+        b.type='button'; b.title='Radar Calabria (RainViewer)'; b.setAttribute('aria-label','Radar Calabria');
+        b.textContent='Rad';
+        L.DomEvent.on(b,'click',function(ev){ L.DomEvent.stop(ev); RAD.toggle(); });
+        L.DomEvent.disableClickPropagation(wrap);
+        L.DomEvent.disableScrollPropagation(wrap);
+        return wrap;
+      }
+    });
+    map.addControl(new Control());
+  })();
+
+  window.MLG_RADAR = RAD;
+})();
+</script>
+
+
+
+
+
+<script id="mlg-satellite-clouds">
+(function(){
+  var map = window._mlgMap;
+  if(!map || !window.L) return;
+
+  var SAT = {
+    on:false, idx:0, times:[], layers:[], fallbackLayer:null
+  };
+
+  function ensureFallback(){
+    if(!SAT.fallbackLayer){
+      SAT.fallbackLayer = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        {maxZoom:19, zIndex:150, attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'}
+      );
+    }
+  }
+
+  function buildLayers(cb){
+    if(SAT.layers.length || SAT.fallbackLayer){ cb && cb(); return; }
+    fetch('https://api.rainviewer.com/public/weather-maps.json').then(r=>r.json()).then(function(data){
+      var host = data.host || '';
+      var arr = (data && data.satellite && data.satellite.past) ? data.satellite.past : [];
+      if(arr.length){
+        SAT.times = arr.map(function(f){ return { path:f.path, t:f.time }; });
+        // prova prima con il formato più comune, in caso di errore i tile saranno vuoti
+        SAT.layers = SAT.times.map(function(f){
+          return L.tileLayer(host + f.path + '/256/{z}/{x}/{y}/0/0_1.png', {
+            opacity:0.70, zIndex:150, attribution:'&copy; RainViewer Satellite'
+          });
+        });
+      }else{
+        ensureFallback();
+      }
+      cb && cb();
+    }).catch(function(){ ensureFallback(); cb && cb(); });
+  }
+
+  function addCurrent(){
+    if(SAT.layers.length){
+      SAT.layers[SAT.idx].addTo(map);
+    }else{
+      ensureFallback(); SAT.fallbackLayer.addTo(map);
+    }
+  }
+  function removeCurrent(){
+    if(SAT.layers.length){
+      try{ map.removeLayer(SAT.layers[SAT.idx]); }catch(_){}
+    }else if(SAT.fallbackLayer){
+      try{ map.removeLayer(SAT.fallbackLayer); }catch(_){}
+    }
+  }
+  function goLatest(){ if(SAT.layers.length){ SAT.idx = Math.max(0, SAT.layers.length-1); } }
+
+  SAT.toggle = function(){
+    buildLayers(function(){
+      if(SAT.on){ removeCurrent(); SAT.on=false; return; }
+      removeCurrent(); goLatest(); addCurrent(); SAT.on=true;
+    });
+  };
+
+  // Pulsante laterale Sat
+  (function addControl(){
+    var Control=L.Control.extend({ options:{position:'topleft'},
+      onAdd:function(){
+        var w=L.DomUtil.create('div','leaflet-control mlg-sat-control');
+        var b=L.DomUtil.create('button','sb-btn small',w);
+        b.type='button'; b.title='Satellite (nuvole, con fallback immagini Esri)';
+        b.textContent='Sat';
+        L.DomEvent.on(b,'click',function(ev){ L.DomEvent.stop(ev); SAT.toggle(); });
+        L.DomEvent.disableClickPropagation(w);
+        L.DomEvent.disableScrollPropagation(w);
+        return w;
+      }
+    });
+    map.addControl(new Control());
+  })();
+})();
+</script>
 </body>
 </html>
