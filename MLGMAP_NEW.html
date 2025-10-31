@@ -2561,6 +2561,21 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
       }
       var sorter = sorters(mode);
       items.sort(sorter);
+      // De-dup by display name (keep the first occurrence after sorting)
+      (function(){
+        try{
+          var seen = new Set();
+          var dedup = [];
+          for (var i=0;i<items.length;i++){
+            var key = String(items[i].name||"").toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            dedup.push(items[i]);
+          }
+          items = dedup;
+        }catch(_){}
+      })();
+
 
       // Build list HTML
       var html = '';
