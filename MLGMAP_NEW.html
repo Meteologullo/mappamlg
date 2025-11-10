@@ -1318,6 +1318,88 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
 }
 </style>
 
+<link rel="preconnect" href="https://www.meteologullo.com" crossorigin>
+<link rel="dns-prefetch" href="//www.meteologullo.com">
+
+
+<style id="mlg-bottom-embed-css">
+  #mlg-bottom-embed {
+    box-sizing: border-box;
+    width: 100%;
+    background: #fff;
+    border-top: 1px solid rgba(0,0,0,.08);
+    box-shadow: 0 -6px 20px rgba(0,0,0,.06);
+    margin: 0;
+    padding: 12px 12px 16px;
+  }
+  #mlg-bottom-embed h2 {
+    margin: 0 0 8px;
+    font: 600 16px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    color: #111;
+  }
+  #mlg-bottom-embed .mlg-iframe {
+    display:block;
+    width: 100%;
+    height: 65vh; /* ben visibile ma non copre tutto */
+    border: 0;
+    border-radius: 12px;
+    background: #f7f7f8;
+  }
+  #mlg-bottom-embed .mlg-fallback {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #444;
+  }
+  /* Evita che contenitori full-viewport coprano la sezione */
+  html, body { min-height: 100%; }
+</style>
+
+
+
+<script id="mlg-no-autoscroll-guard">
+(function(){
+  // Keep original scroll position
+  var initialX = window.scrollX || 0;
+  var initialY = window.scrollY || 0;
+  var userInteracted = false;
+
+  function markInteracted(){ userInteracted = true; }
+  window.addEventListener('pointerdown', markInteracted, {capture:true, once:true});
+  window.addEventListener('keydown', markInteracted, {capture:true, once:true});
+
+  // If browser tries to focus the iframe before interaction, blur it and restore scroll
+  window.addEventListener('focusin', function(ev){
+    var t = ev.target;
+    if(!userInteracted && t && t.tagName === 'IFRAME' && t.id === 'mlg-bottom-iframe'){
+      // Defer to let the browser move first, then pull back
+      setTimeout(function(){
+        try{ t.blur(); }catch(e){}
+        try{ if(document.activeElement && document.activeElement.tagName === 'IFRAME'){ document.activeElement.blur(); } }catch(e){}
+        try{ window.scrollTo(initialX, initialY); }catch(e){}
+      }, 0);
+    }
+  }, true);
+
+  // Be extra safe right after load as well
+  window.addEventListener('load', function(){
+    if(!userInteracted){
+      try{ window.scrollTo(initialX, initialY); }catch(e){}
+    }
+  }, { once:true });
+})();
+</script>
+
+
+
+<style id="mlg-ranking-override">
+  /* Estende l'altezza visibile della lista Classifiche stazioni */
+  #rankingList{ max-height: 60vh !important; }
+  @media (min-height: 800px){
+    #rankingList{ max-height: 70vh !important; }
+  }
+</style>
+
+
 </head>
 <body>
 
@@ -2001,11 +2083,79 @@ function bubbleMarker(st){
     });
   }
 
-  // ---- RUN ----
+  
+  // === CACHING (5–10 minuti) ===
+  (function(){
+    const KEY = 'mlgStationsCache_v2';
+    // Puoi modificare i minuti in localStorage.MLG_CACHE_MINUTES (intero tra 5 e 10)
+    let TTL_MINUTES = parseInt(localStorage.getItem('MLG_CACHE_MINUTES') || '10', 10);
+    if (!isFinite(TTL_MINUTES)) TTL_MINUTES = 8;
+    TTL_MINUTES = Math.max(5, Math.min(10, TTL_MINUTES));
+    const TTL_MS = TTL_MINUTES * 60 * 1000;
+
+    function read(hours){
+      try{
+        const raw = localStorage.getItem(KEY);
+        if(!raw) return null;
+        const obj = JSON.parse(raw);
+        if(!obj || typeof obj.when !== 'number') return null;
+        if (String(obj.hours) !== String(hours)) return null;
+        if ((Date.now() - obj.when) > TTL_MS) return null;
+        return obj;
+      }catch(_){ return null; }
+    }
+    function write(hours, centers, wu){
+      try{
+        const payload = { when: Date.now(), hours: hours, centers: centers||[], wu: wu||null };
+        localStorage.setItem(KEY, JSON.stringify(payload));
+      }catch(_){}
+    }
+    function clear(){ try{ localStorage.removeItem(KEY); }catch(_){ } }
+    window.__MLG_CACHE = { KEY, TTL_MS, read, write, clear };
+  })();
+// ---- RUN ----
   function run(){
     var statusEl = document.getElementById('status');
     statusEl.textContent = "caricamento...";
-    var hours = Number(document.getElementById('hours').value)||24;
+    var hours = Number(document.getElementById('hours').value)||24;var statusEl = document.getElementById('status');
+    statusEl.textContent = "caricamento...";
+    
+    // --- Short-circuit da cache ---
+    (function(){
+      try{
+        var __cached = (window.__MLG_CACHE && window.__MLG_CACHE.read(hours)) || null;
+        if (__cached && __cached.centers && __cached.centers.length){
+          var statusEl = document.getElementById('status');
+          if (statusEl) statusEl.textContent = '';
+          // Legenda vuota iniziale, poi aggiorno con i conteggi cache
+          var progress = (typeof CENTERS!=='undefined' ? CENTERS.map(function(c){ return {name:c.name, color:c.color, count:0, variant:'--'}; }) : []);
+          if (typeof updateLegend === 'function') updateLegend(progress);
+          // Centri / stazioni
+          try{
+            __cached.centers.forEach(function(entry, idx){
+              var list = entry.norm || entry.stations || [];
+              if (typeof renderStations === 'function') renderStations(list);
+              var name = (entry.center && entry.center.name) || (CENTERS && CENTERS[idx] && CENTERS[idx].name) || 'Centro';
+              var color = (entry.center && entry.center.color) || (CENTERS && CENTERS[idx] && CENTERS[idx].color) || '#888';
+              progress[idx] = {name:name, color:color, count:(list && list.length) || 0, variant: entry.variant || '--'};
+              if (typeof updateLegend === 'function') updateLegend(progress);
+            });
+          }catch(_){}
+          // WU
+          try{
+            if (__cached.wu && Array.isArray(__cached.wu.list)){
+              (__cached.wu.list || []).forEach(function(st){ if (typeof bubbleMarker==='function') bubbleMarker(st).addTo(map); });
+              var pill = '<span class="pill"><span class="dot" style="background:'+WU_COLOR+'"></span><b>WUnderground PWS</b>: '+((__cached.wu.count!=null?__cached.wu.count:((__cached.wu.list&&__cached.wu.list.length)||0)))+' stazioni</span>';
+              var el = document.getElementById('note'); if(el) el.innerHTML = el.innerHTML + pill;
+            }
+          }catch(_){}
+          try{ if(window.renderRanking) window.renderRanking(); }catch(_){}
+          // Interrompo prima di qualsiasi fetch
+          return;
+        }
+      }catch(_){}
+    })();
+    
     var now = new Date();
     var from = new Date(now.getTime() - hours*3600*1000);
     var fromStr = fmtSpace(from), toStr = fmtSpace(now);
@@ -2027,7 +2177,9 @@ function bubbleMarker(st){
             }
           }catch(_){}
           if (wu && wu.list){
-            for (const st of wu.list){
+            
+            try{ if(__cachePkg) __cachePkg.wu = {list:(wu.list||[]), count:(wu.count||((wu.list&&wu.list.length)||0))}; }catch(_){}
+for (const st of wu.list){
               const m = bubbleMarker(st).addTo(map);
               try{
                 if (window.fetchDailyExtremes && st.id){
@@ -2064,7 +2216,9 @@ function bubbleMarker(st){
       onEach: function(item, idx){
         var isErr = item && item.error;
         if (!isErr){
-          renderStations(item.norm);
+          
+        try{ (__cachePkg && __cachePkg.centers) && __cachePkg.centers.push({center:item.center, norm:item.norm, variant:item.variant}); }catch(_){}
+renderStations(item.norm);
           progress[idx] = {name:item.center.name, color:item.center.color, count:item.norm.length, variant:item.variant};
         }else{
           progress[idx] = {name:item.center.name, color:item.center.color, count:0, variant:"errore"};
@@ -2073,7 +2227,9 @@ function bubbleMarker(st){
       }
     }).then(function(){
       fetchWUAll().then(async function(wu){
-        if (wu.list && wu.list.length){ try{ if (window.__stationProgress) window.__stationProgress.incExpected(wu.list.length); }catch(_){} console.debug("[WU][EXT] stations ready:", wu.list.length);
+        if (wu.list && wu.list.length){
+          try{ if(__cachePkg) __cachePkg.wu = {list:(wu.list||[]), count:(wu.count||((wu.list&&wu.list.length)||0))}; }catch(_){}
+ try{ if (window.__stationProgress) window.__stationProgress.incExpected(wu.list.length); }catch(_){} console.debug("[WU][EXT] stations ready:", wu.list.length);
           for (const st of wu.list){ console.debug("[WU][EXT] station:", st.id, st.label);
             const m = bubbleMarker(st).addTo(map);
             try{
@@ -2277,6 +2433,7 @@ if (hide){ if (map.hasLayer(m)) map.removeLayer(m); continue; }
         b.addEventListener('click', function(){
           var mode = this.dataset.mode;
           if (mode === 'refresh'){
+            
             window.__ALL_MARKERS.length = 0; // reset registry, i nuovi marker verranno reinseriti dall'hook
             window.location.href = "https://www.meteologullo.com/stazioni-meteorologiche-mlg";
           }else{
@@ -3941,6 +4098,1225 @@ function refreshUi(){
   }
 })();
 </script>
+
+
+<!-- === MLG PERF PATCH: fast initial stations load + batch add (2025-11-10) === -->
+<script id="mlg-perf-fastboot">
+(function(){
+  // Minimal-first fetch with background upgrade to full "stable" payload
+  try{
+    if (typeof window.fetchForCenter === 'function'){
+      (function(){
+        var _buildURL = window.buildURL;
+        var _buildStableQ = window.buildStableQ;
+        var _buildMinimalQ = window.buildMinimalQ;
+        var _fetchJSON = window.fetchJSON;
+        var _normalize = window.normalize || function(x){ return x; };
+        window.fetchForCenter = function(center, fromStr, toStr){
+          var qMin = _buildMinimalQ(fromStr, toStr);
+          var qStb = _buildStableQ(fromStr, toStr);
+          var uMin = _buildURL(center, qMin);
+          var uStb = _buildURL(center, qStb);
+          var resolved = false, firstVariant = null;
+          var firstList = null;
+          return new Promise(function(resolve, reject){
+            // Quick/minimal first
+            _fetchJSON(uMin).then(function(resMin){
+              var listMin = Array.isArray(resMin)? resMin : (resMin.stations || resMin.data || resMin.results || []);
+              firstList = listMin;
+              if(!resolved){
+                resolved = true; firstVariant = 'minimal';
+                resolve({center:center, list:listMin, variant:'minimal'});
+              }
+            }).catch(function(_e){ /* ignore minimal failure */ });
+            // Full/stable (background upgrade)
+            _fetchJSON(uStb).then(function(resStb){
+              var listStb = Array.isArray(resStb)? resStb : (resStb.stations || resStb.data || resStb.results || []);
+              if(!resolved){
+                resolved = true; firstVariant = 'stable';
+                resolve({center:center, list:listStb, variant:'stable'});
+              }else if(firstVariant==='minimal'){
+                // Upgrade existing markers in place when stable arrives
+                try{
+                  var byKey = new Map();
+                  (listStb||[]).forEach(function(s){
+                    var n = _normalize(s)||{};
+                    var k = (n.id||n.code||n.stationId||n.name||'')+'@'+(n.lat!=null?n.lat:'')+','+(n.lon!=null?n.lon:'');
+                    byKey.set(k, n);
+                  });
+                  (window.__ALL_MARKERS||[]).forEach(function(m){
+                    try{
+                      var st = m && m.__station; if(!st) return;
+                      var k = (st.id||st.stationId||st.name||'')+'@'+(st.lat!=null?st.lat:'')+','+(st.lon!=null?st.lon:'');
+                      var up = byKey.get(k);
+                      if(up){
+                        var changed=false;
+                        var keys = ['tMin','tMax','rh','ws','wg','rain','wd']; // merge a few useful fields
+                        for (var i=0;i<keys.length;i++){
+                          var key = keys[i];
+                          if (up[key]!=null && up[key]!==st[key]){ st[key]=up[key]; changed=true; }
+                        }
+                        if(changed){
+                          try{ m.setPopupContent(window.buildPopupHTML ? window.buildPopupHTML(st) : (m.getPopup() && m.getPopup().getContent())); }catch(_){}
+                          try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){}
+                        }
+                      }
+                    }catch(_){}
+                  });
+                }catch(_){}
+              }
+            }).catch(function(e){
+              if(!resolved){ resolved = true; reject(e); }
+            });
+            // Safety timeout
+            setTimeout(function(){ if(!resolved){ resolved=true; reject(new Error('timeout')); } }, 12000);
+          });
+        };
+      })();
+    }
+  }catch(_){}
+
+  // Batch-add optimization: hide marker pane while adding a chunk
+  try{
+    if (typeof window.renderStations === 'function' && window.L && (window.map || window._mlgMap)){
+      (function(){
+        var _orig = window.renderStations;
+        window.renderStations = function(stations){
+          try{
+            var mref = window._mlgMap || window.map;
+            var mp = (mref && mref.getPanes && mref.getPanes().markerPane) || null;
+            var prev = mp ? mp.style.display : null;
+            if (mp) mp.style.display = 'none';
+            // original logic, but we inline to keep stationProgress counting via Marker.addTo(map)
+            for (var i=0;i<(stations||[]).length;i++){
+              var s = stations[i]; if (!isFinite(s.lat)||!isFinite(s.lon)) continue;
+              window.bubbleMarker(s).addTo(window.map || window._mlgMap);
+            }
+            if (mp) mp.style.display = prev || '';
+          }catch(e){
+            // fallback to original if something goes wrong
+            try{ return _orig.apply(this, arguments); }catch(_){}
+          }
+        };
+      })();
+    }
+  }catch(_){}
+})();
+</script>
+
+<!-- === MLG PERF PATCH v2: Meteohub fast path (2025-11-10) === -->
+<script id="mlg-perf-meteohub">
+(function(){
+  // 0) Helper: station key for de-dup + cache
+  function stKey(st){
+    if(!st) return '';
+    var id = st.id || st.code || st.stationId || st.station_id || st.name || '';
+    var la = (st.lat!=null? Number(st.lat).toFixed(5) : '');
+    var lo = (st.lon!=null? Number(st.lon).toFixed(5) : '');
+    return String(id)+'@'+la+','+lo;
+  }
+
+  // 1) Ensure overlay progress keeps working even if renderStations is overridden
+  //    We also de-dup before counting expected.
+  try{
+    var _origRender = window.renderStations;
+    var _mapRef = window._mlgMap || window.map;
+    var _L = window.L;
+    window.__MH_SEEN = window.__MH_SEEN || new Set();
+    window.__MH_CACHE = window.__MH_CACHE || [];
+
+    if (typeof _origRender === 'function' && _L && (_mapRef)){
+      window.renderStations = function(stations){
+        try{
+          var list = Array.isArray(stations)? stations : [];
+          // de-dup by id@lat,lon
+          var out = [];
+          for (var i=0;i<list.length;i++){
+            var s=list[i]; if(!s) continue;
+            if (!isFinite(s.lat)||!isFinite(s.lon)) continue;
+            var k = stKey(s);
+            if (window.__MH_SEEN.has(k)) continue;
+            window.__MH_SEEN.add(k);
+            out.push(s);
+          }
+          // count expected AFTER filtering
+          try{ if (window.__stationProgress) window.__stationProgress.incExpected(out.length); }catch(_){}
+
+          // Batch add: hide marker pane while adding a chunk
+          var panes = _mapRef && _mapRef.getPanes && _mapRef.getPanes();
+          var mp = panes && panes.markerPane || null;
+          var prev = mp ? mp.style.display : null;
+          if (mp) mp.style.display = 'none';
+          for (var j=0;j<out.length;j++){
+            try{ window.bubbleMarker(out[j]).addTo(_mapRef); }catch(_){}
+          }
+          if (mp) mp.style.display = prev || '';
+
+          // append to in-memory cache; save debounced
+          try{
+            for (var j=0;j<out.length;j++){ window.__MH_CACHE.push(out[j]); }
+            clearTimeout(window.__mh_cache_t);
+            window.__mh_cache_t = setTimeout(function(){
+              try{
+                var pkg = { ts: Date.now(), list: window.__MH_CACHE.slice(0, 1500) };
+                localStorage.setItem('mlg_meteohub_cache_v1', JSON.stringify(pkg));
+              }catch(_){}
+            }, 1200);
+          }catch(_){}
+
+        }catch(e){
+          try{ return _origRender.apply(this, arguments); }catch(_){}
+        }
+      };
+    }
+  }catch(_){}
+
+  // 2) Lazy popup content to avoid building hundreds of strings immediately
+  try{
+    var __bmPrev = window.bubbleMarker;
+    if (typeof __bmPrev === 'function' && window.L){
+      window.bubbleMarker = function(st){
+        var m = __bmPrev(st);
+        try{
+          var _built = false;
+          var _placeholder = '<div style="min-width:220px;min-height:40px">Caricamento…</div>';
+          // set lightweight placeholder (if we can)
+          try{ m.setPopupContent(_placeholder); }catch(_){}
+          m.on('popupopen', function(){
+            if (_built) return;
+            _built = true;
+            try{ m.setPopupContent(window.buildPopupHTML ? window.buildPopupHTML(st) : _placeholder); }catch(_){}
+          });
+        }catch(_){}
+        return m;
+      };
+    }
+  }catch(_){}
+
+  // 3) Increase concurrency for pMap-based center fetching
+  try{
+    var __origPMap = window.pMap;
+    if (typeof __origPMap === 'function'){
+      window.pMap = function(items, mapper, opts){
+        opts = opts || {};
+        if (opts.concurrency == null || opts.concurrency < 16) opts.concurrency = 16;
+        return __origPMap(items, mapper, opts);
+      };
+    }
+  }catch(_){}
+
+  // 4) Faster "minimal-first" timeouts for Meteohub (works with the v1 fastboot patch too)
+  try{
+    if (typeof window.fetchForCenter === 'function' && typeof window.fetchJSON === 'function'){
+      (function(){
+        var _fetchForCenter = window.fetchForCenter;
+        var _fetchJSON = window.fetchJSON;
+        window.fetchForCenter = function(center, fromStr, toStr){
+          // try the minimal path with tighter timeout; if fastboot already returns minimal first, pass shorter timeout
+          try{
+            var _p = _fetchForCenter(center, fromStr, toStr);
+            // if _fetchForCenter is our fastboot promise, we can't change its internals;
+            // but we can additionally "race" a bespoke minimal fetch with 6s timeout to get first paint
+            var qMin = (window.buildMinimalQ && window.buildMinimalQ(fromStr, toStr)) || null;
+            var uMin = (window.buildURL && qMin)? window.buildURL(center, qMin) : null;
+            if (uMin){
+              var minimalProbe = _fetchJSON(uMin, 6000).then(function(resMin){
+                var listMin = Array.isArray(resMin)? resMin : (resMin.stations || resMin.data || resMin.results || []);
+                return {center:center, list:listMin, variant:'minimal'};
+              });
+              return Promise.race([_p, minimalProbe]);
+            }
+            return _p;
+          }catch(_){
+            return _fetchForCenter(center, fromStr, toStr);
+          }
+        };
+      })();
+    }
+  }catch(_){}
+
+  // 5) SWR cache: show last-known stations immediately (15 min TTL), then live data upgrades them
+  try{
+    var raw = localStorage.getItem('mlg_meteohub_cache_v1');
+    if (raw){
+      try{
+        var pkg = JSON.parse(raw);
+        if (pkg && pkg.list && (Date.now() - Number(pkg.ts||0) < 15*60*1000)){
+          // Use renderStations so progress/legend/UI remain consistent and de-dup happens
+          try{ window.renderStations(pkg.list||[]); }catch(_){}
+        }
+      }catch(_){}
+    }
+  }catch(_){}
+})();
+</script>
+
+<!-- === MLG PERF PATCH v3: Lazy calculations on demand (popup & classifica) — 2025-11-10 === -->
+<script id="mlg-perf-lazycalc-v3">
+(function(){
+  // 0) helpers and globals
+  function stationId(st){
+    return st && (st.id || st.code || st.stationId || st.station_id || st.name);
+  }
+  function ensureMaps(){
+    window.__STATIONS_BY_ID = window.__STATIONS_BY_ID || new Map();
+    window.__MARKERS_BY_ID  = window.__MARKERS_BY_ID  || new Map();
+  }
+  ensureMaps();
+
+  // 1) Wrap bubbleMarker to index markers by station id and attach station refs
+  try{
+    var _bubble = window.bubbleMarker;
+    if (typeof _bubble === 'function'){
+      window.bubbleMarker = function(st){
+        var m = _bubble(st);
+        try{
+          var sid = stationId(st);
+          if (sid != null){
+            ensureMaps();
+            window.__STATIONS_BY_ID.set(String(sid), st);
+            m.__station = st;
+            m.__sid = String(sid);
+            window.__MARKERS_BY_ID.set(String(sid), m);
+          }
+        }catch(_){}
+        return m;
+      };
+    }
+  }catch(_){}
+
+  // 2) On-demand heavy calculations
+  // Try to call whichever "compute" fn the app provides, otherwise no-op.
+  window.__ensureStationComputed = function(st){
+    if (!st) return;
+    if (st.__computed_stats) return;
+    try{
+      if (typeof window.computeStationDerived === 'function'){
+        window.computeStationDerived(st);
+      } else if (typeof window.calcStation === 'function'){
+        window.calcStation(st);
+      } else if (typeof window.prepareStationData === 'function'){
+        window.prepareStationData(st);
+      } else if (typeof window.buildPopupHTML === 'function'){
+        // As a fallback, building the popup usually triggers any lazy formatting
+        // We'll build once and discard (the popupopen will rebuild).
+        try{ window.buildPopupHTML(st); }catch(_){}
+      }
+    }catch(_){}
+    st.__computed_stats = true;
+  };
+
+  // 3) Lazy popup content (keeps from v2 but ensures __ensureStationComputed runs)
+  try{
+    var __bmPrev = window.bubbleMarker;
+    if (typeof __bmPrev === 'function' && window.L){
+      window.bubbleMarker = function(st){
+        var m = __bmPrev(st);
+        try{
+          var _built = false;
+          var _placeholder = '<div style="min-width:220px;min-height:40px">Caricamento…</div>';
+          try{ m.setPopupContent(_placeholder); }catch(_){}
+          m.on('popupopen', function(){
+            if (_built) return;
+            _built = true;
+            try{ window.__ensureStationComputed(st); }catch(_){}
+            try{ m.setPopupContent(window.buildPopupHTML ? window.buildPopupHTML(st) : _placeholder); }catch(_){}
+          });
+        }catch(_){}
+        return m;
+      };
+    }
+  }catch(_){}
+
+  // 4) Leaderboard/classifica click: compute-on-select and open popup
+  // We try common selectors/attributes without assuming exact markup.
+  try{
+    document.addEventListener('click', function(ev){
+      try{
+        var el = ev.target;
+        // Walk up to 6 levels to find a classifica-like item
+        for (var i=0; i<6 && el; i++, el = el.parentElement){
+          var sid = null;
+          if (el.dataset){
+            sid = el.dataset.stationId || el.dataset.sid || el.dataset.station || el.getAttribute('data-id');
+          }
+          if (!sid){
+            var idAttr = el.getAttribute && (el.getAttribute('data-station-id') || el.getAttribute('data-station'));
+            sid = sid || idAttr;
+          }
+          var cls = (el.className || '')+'';
+          var looksLikeItem = /classifica|rank|leader|lista-stazioni|stazione-item/i.test(cls);
+          if (sid || looksLikeItem){
+            // If no explicit sid, try to read from child attribute commonly used
+            if (!sid && el.querySelector){
+              var cand = el.querySelector('[data-station-id],[data-sid],[data-station],[data-id]');
+              if (cand){
+                sid = cand.dataset.stationId || cand.dataset.sid || cand.dataset.station || cand.getAttribute('data-id');
+              }
+            }
+            if (sid){
+              ensureMaps();
+              sid = String(sid);
+              var st = window.__STATIONS_BY_ID.get(sid);
+              var mk = window.__MARKERS_BY_ID.get(sid);
+              if (st){
+                try{ window.__ensureStationComputed(st); }catch(_){}
+              }
+              if (mk && mk.openPopup){
+                try{
+                  mk.openPopup();
+                  // ensure it comes into view
+                  var map = window._mlgMap || window.map;
+                  if (map && map.flyTo && mk.getLatLng){
+                    map.flyTo(mk.getLatLng(), Math.max(8, map.getZoom ? map.getZoom() : 8), {duration:0.35});
+                  }
+                }catch(_){}
+              }
+              return; // stop after handling
+            }
+          }
+        }
+      }catch(_){}
+    }, true);
+  }catch(_){}
+
+  // 5) Small extra: defer non-critical re-coloring after first paint
+  try{
+    if (!window.__deferredRecolor){
+      window.__deferredRecolor = function(){
+        try{
+          if (window.requestIdleCallback){
+            requestIdleCallback(function(){ try{ if (window.applyMode) window.applyMode(); }catch(_){} }, {timeout:800});
+          }else{
+            setTimeout(function(){ try{ if (window.applyMode) window.applyMode(); }catch(_){ } }, 400);
+          }
+        }catch(_){}
+      };
+      // first time the map goes idle, schedule recolor
+      setTimeout(window.__deferredRecolor, 300);
+    }
+  }catch(_){}
+
+})();
+</script>
+
+<!-- === MLG PERF PATCH v4: Viewport-first rendering & marker virtualization — 2025-11-10 === -->
+<script id="mlg-perf-viewport-v4">
+(function(){
+  // Utilities
+  function stKey(st){
+    if(!st) return '';
+    var id = st.id || st.code || st.stationId || st.station_id || st.name || '';
+    var la = (st.lat!=null? Number(st.lat).toFixed(5) : '');
+    var lo = (st.lon!=null? Number(st.lon).toFixed(5) : '');
+    return String(id)+'@'+la+','+lo;
+  }
+  function ensureGlobals(){
+    window.__ALL_STATIONS = window.__ALL_STATIONS || [];
+    window.__DRAWN = window.__DRAWN || new Set();
+    window.__STATIONS_BY_ID = window.__STATIONS_BY_ID || new Map();
+    window.__MARKERS_BY_ID  = window.__MARKERS_BY_ID  || new Map();
+    window.__MH_SEEN = window.__MH_SEEN || new Set();
+  }
+  ensureGlobals();
+
+  // Bounds helpers
+  function getMap(){
+    return window._mlgMap || window.map;
+  }
+  function inPaddedBounds(st, pad){
+    var m = getMap(); if(!m || !m.getBounds) return true; // if no map yet, allow
+    var b = m.getBounds();
+    if (!b || !b.pad) return true;
+    var pb = b.pad(pad==null?0.35:pad); // draw a bit outside viewport
+    var lat = Number(st.lat), lon = Number(st.lon);
+    if (!isFinite(lat) || !isFinite(lon)) return false;
+    return lat >= pb.getSouth() && lat <= pb.getNorth() && lon >= pb.getWest() && lon <= pb.getEast();
+  }
+
+  // Draw engine (chunked)
+  window.__drawCycleScheduled = false;
+  function drawVisible(maxPerSlice){
+    ensureGlobals();
+    var m = getMap(); if(!m) return;
+    var toAdd = [];
+    for (var i=0;i<window.__ALL_STATIONS.length;i++){
+      var s = window.__ALL_STATIONS[i]; if (!s) continue;
+      var k = stKey(s);
+      if (window.__DRAWN.has(k)) continue;
+      if (!inPaddedBounds(s, 0.35)) continue;
+      toAdd.push(s);
+      if (toAdd.length >= (maxPerSlice||250)) break;
+    }
+    if (!toAdd.length) return;
+
+    // Hide marker pane for batch add
+    var panes = m.getPanes && m.getPanes();
+    var mp = panes && panes.markerPane || null;
+    var prev = mp ? mp.style.display : null;
+    if (mp) mp.style.display = 'none';
+
+    for (var j=0;j<toAdd.length;j++){
+      var st = toAdd[j];
+      var k = stKey(st);
+      try{
+        var mk = window.bubbleMarker(st).addTo(m);
+        window.__DRAWN.add(k);
+        var sid = st.id || st.code || st.stationId || st.station_id || st.name;
+        if (sid != null){
+          sid = String(sid);
+          window.__STATIONS_BY_ID.set(sid, st);
+          if (mk){ mk.__station = st; mk.__sid = sid; window.__MARKERS_BY_ID.set(sid, mk); }
+        }
+        try{ if (window.__stationProgress && window.__stationProgress.incCompleted) window.__stationProgress.incCompleted(1); }catch(_){}
+      }catch(_){}
+    }
+
+    if (mp) mp.style.display = prev || '';
+
+    // Schedule another slice soon if there might be more
+    if (toAdd.length === (maxPerSlice||250)){
+      if (window.requestIdleCallback){
+        requestIdleCallback(function(){ drawVisible(maxPerSlice); }, {timeout: 250});
+      } else {
+        setTimeout(function(){ drawVisible(maxPerSlice); }, 50);
+      }
+    }
+  }
+
+  function scheduleDraw(){
+    if (window.__drawCycleScheduled) return;
+    window.__drawCycleScheduled = true;
+    var run = function(){
+      window.__drawCycleScheduled = false;
+      drawVisible(300);
+    };
+    if (window.requestIdleCallback){
+      requestIdleCallback(run, {timeout: 200});
+    } else {
+      setTimeout(run, 20);
+    }
+  }
+
+  // Override renderStations: store + de-dup; don't render all at once
+  (function(){
+    var _orig = window.renderStations;
+    window.renderStations = function(stations){
+      ensureGlobals();
+      try{
+        var list = Array.isArray(stations)? stations : [];
+        var added = 0;
+        for (var i=0;i<list.length;i++){
+          var s=list[i]; if(!s) continue;
+          if (!isFinite(s.lat)||!isFinite(s.lon)) continue;
+          var k = stKey(s);
+          if (window.__MH_SEEN.has(k)) continue;
+          window.__MH_SEEN.add(k);
+          window.__ALL_STATIONS.push(s);
+          added++;
+        }
+        // Progress accounting
+        try{ if (window.__stationProgress && window.__stationProgress.incExpected) window.__stationProgress.incExpected(added); }catch(_){}
+        scheduleDraw();
+      }catch(e){
+        try{ return _orig.apply(this, arguments); }catch(_){}
+      }
+    };
+  })();
+
+  // Re-draw on map move/zoom
+  try{
+    var m = getMap();
+    if (m && m.on){
+      m.on('moveend zoomend', function(){ scheduleDraw(); });
+    } else {
+      // map might not be ready yet — try once after load
+      setTimeout(function(){ var mm=getMap(); if (mm && mm.on){ mm.on('moveend zoomend', function(){ scheduleDraw(); }); scheduleDraw(); } }, 300);
+    }
+  }catch(_){}
+
+  // Ensure visibility when selected from leaderboard/classifica
+  document.addEventListener('click', function(ev){
+    try{
+      var el = ev.target;
+      for (var i=0; i<6 && el; i++, el = el.parentElement){
+        var sid = null;
+        if (el.dataset){
+          sid = el.dataset.stationId || el.dataset.sid || el.dataset.station || el.getAttribute('data-id');
+        }
+        if (!sid){
+          var idAttr = el.getAttribute && (el.getAttribute('data-station-id') || el.getAttribute('data-station'));
+          sid = sid || idAttr;
+        }
+        var cls = (el.className || '')+'';
+        var looksLikeItem = /classifica|rank|leader|lista-stazioni|stazione-item/i.test(cls);
+        if (sid || looksLikeItem){
+          if (!sid && el.querySelector){
+            var cand = el.querySelector('[data-station-id],[data-sid],[data-station],[data-id]');
+            if (cand){
+              sid = cand.dataset.stationId || cand.dataset.sid || cand.dataset.station || cand.getAttribute('data-id');
+            }
+          }
+          if (sid){
+            sid = String(sid);
+            var st = window.__STATIONS_BY_ID.get(sid);
+            // If we haven't drawn the marker yet, create it now (even if outside viewport)
+            if (st && !window.__MARKERS_BY_ID.get(sid)){
+              try{
+                var m = getMap();
+                var mk = window.bubbleMarker(st).addTo(m);
+                if (mk){ mk.__station = st; mk.__sid = sid; window.__MARKERS_BY_ID.set(sid, mk); }
+                window.__DRAWN.add(stKey(st));
+                try{ if (window.__stationProgress && window.__stationProgress.incCompleted) window.__stationProgress.incCompleted(1); }catch(_){}
+              }catch(_){}
+            }
+            // Compute heavy values on demand and open popup
+            try{ window.__ensureStationComputed && window.__ensureStationComputed(st); }catch(_){}
+            var mk2 = window.__MARKERS_BY_ID.get(sid);
+            if (mk2 && mk2.openPopup){
+              try{
+                mk2.openPopup();
+                var map = getMap();
+                if (map && map.flyTo && mk2.getLatLng){
+                  map.flyTo(mk2.getLatLng(), Math.max(8, map.getZoom ? map.getZoom() : 8), {duration:0.35});
+                }
+              }catch(_){}
+            }
+            return;
+          }
+        }
+      }
+    }catch(_){}
+  }, true);
+
+})();
+</script>
+
+<!-- === MLG PERF PATCH v5: HTTP SWR cache + Canvas FastDots (2025-11-10) === -->
+<script id="mlg-perf-sprint-v5">
+(function(){
+  // 1) HTTP localStorage SWR cache for meteohub/minimal/stable endpoints
+  try{
+    if (typeof window.fetchJSON === 'function'){
+      (function(){
+        var _fetchJSON = window.fetchJSON;
+        var PASS = function(url){
+          var u = (url||'')+'';
+          u = u.toLowerCase();
+          return !(u.includes('meteohub') || u.includes('minimal') || u.includes('stable') || u.includes('stations'));
+        };
+        window.fetchJSON = function(url, timeout){
+          try{
+            if (PASS(url)) return _fetchJSON(url, timeout);
+            var key = 'mlg_http_cache_v1::'+url;
+            var now = Date.now();
+            var ttl = 10*60*1000; // 10 minutes
+            try{
+              var raw = localStorage.getItem(key);
+              if (raw){
+                var pkg = JSON.parse(raw);
+                if (pkg && (now - Number(pkg.ts||0) < ttl) && pkg.data){
+                  // Return cached immediately, and revalidate in background
+                  setTimeout(function(){
+                    _fetchJSON(url, timeout).then(function(fresh){
+                      try{ localStorage.setItem(key, JSON.stringify({ts: Date.now(), data: fresh})); }catch(_){}
+                    }).catch(function(_){ /* keep stale */ });
+                  }, 0);
+                  return Promise.resolve(pkg.data);
+                }
+              }
+            }catch(_){}
+            // No fresh cache: fetch and store
+            return _fetchJSON(url, timeout).then(function(data){
+              try{ localStorage.setItem(key, JSON.stringify({ts: now, data: data})); }catch(_){}
+              return data;
+            });
+          }catch(e){
+            return _fetchJSON(url, timeout);
+          }
+        };
+      })();
+    }
+  }catch(_){}
+
+  // 2) Canvas FastDots overlay for instant feedback while markers stream in
+  try{
+    var map = window._mlgMap || window.map;
+    if (map && map.getContainer){
+      var cnt = map.getContainer();
+      var cv = document.createElement('canvas');
+      cv.id = 'mlg-fastdots';
+      cv.style.position = 'absolute';
+      cv.style.top = '0'; cv.style.left = '0';
+      cv.style.width = '100%'; cv.style.height = '100%';
+      cv.style.pointerEvents = 'none'; // visual-only
+      cv.style.zIndex = (parseInt(getComputedStyle(cnt).zIndex||'0',10)+1).toString();
+      cnt.appendChild(cv);
+
+      var ctx = cv.getContext('2d');
+      window.__ALL_STATIONS = window.__ALL_STATIONS || [];
+      window.__DRAWN = window.__DRAWN || new Set();
+
+      function resize(){
+        var r = window.devicePixelRatio || 1;
+        var w = cnt.clientWidth, h = cnt.clientHeight;
+        cv.width = Math.max(1, Math.floor(w*r));
+        cv.height = Math.max(1, Math.floor(h*r));
+      }
+
+      function redraw(){
+        if (!ctx) return;
+        ctx.clearRect(0,0,cv.width,cv.height);
+        var m = window._mlgMap || window.map; if (!m || !m.latLngToContainerPoint) return;
+        var r = window.devicePixelRatio || 1;
+        var pts = 0;
+        var all = window.__ALL_STATIONS || [];
+        // Draw a lot of points very fast; use low alpha to reduce overdraw cost
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        for (var i=0;i<all.length;i++){
+          var s = all[i]; if (!s) continue;
+          var lat = Number(s.lat), lon = Number(s.lon);
+          if (!isFinite(lat) || !isFinite(lon)) continue;
+          var p = m.latLngToContainerPoint([lat, lon]);
+          // only draw if on screen (with small pad)
+          if (p.x < -6 || p.y < -6 || p.x > cv.width/r + 6 || p.y > cv.height/r + 6) continue;
+          ctx.moveTo(p.x*r+0.5, p.y*r+0.5);
+          ctx.arc(p.x*r+0.5, p.y*r+0.5, 1.8*r, 0, Math.PI*2);
+          pts++;
+          if (pts % 3500 === 0){
+            ctx.stroke(); ctx.beginPath();
+          }
+        }
+        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+        ctx.stroke();
+        // fade out automatically as real markers catch up
+        try{
+          var drawn = window.__DRAWN ? window.__DRAWN.size : 0;
+          var total = all.length || 1;
+          var coverage = drawn/total;
+          cv.style.opacity = coverage > 0.75 ? String(Math.max(0, 1.0 - (coverage-0.75)*4)) : '1';
+          if (coverage >= 0.99){
+            cv.style.display = 'none';
+          } else {
+            cv.style.display = '';
+          }
+        }catch(_){}
+      }
+
+      function schedule(){
+        if (window.requestAnimationFrame){
+          requestAnimationFrame(function(){ resize(); redraw(); });
+        } else {
+          setTimeout(function(){ resize(); redraw(); }, 16);
+        }
+      }
+
+      // Hook into map events
+      try{
+        map.on('move zoom resize', schedule);
+      }catch(_){}
+      // Initial draw
+      setTimeout(schedule, 0);
+      // Also re-draw as stations list fills
+      window.__fastdotsInterval = setInterval(function(){
+        if (cv.style.display === 'none'){ clearInterval(window.__fastdotsInterval); return; }
+        schedule();
+      }, 300);
+    }
+  }catch(_){}
+
+  // 3) Minor: precompute on leaderboard hover after 120ms dwell
+  try{
+    var hovTimer = null;
+    document.addEventListener('mouseover', function(ev){
+      try{
+        var el = ev.target;
+        for (var i=0;i<4 && el; i++, el = el.parentElement){
+          var sid = el && el.dataset && (el.dataset.stationId || el.dataset.sid || el.dataset.station || el.getAttribute('data-id'));
+          if (!sid && el && el.getAttribute){
+            sid = el.getAttribute('data-station-id') || el.getAttribute('data-station');
+          }
+          var cls = (el && el.className || '')+'';
+          var looksLike = /classifica|rank|leader|lista-stazioni|stazione-item/i.test(cls);
+          if (sid || looksLike){
+            if (!sid && el.querySelector){
+              var cand = el.querySelector('[data-station-id],[data-sid],[data-station],[data-id]');
+              if (cand){
+                sid = cand.dataset.stationId || cand.dataset.sid || cand.dataset.station || cand.getAttribute('data-id');
+              }
+            }
+            if (sid){
+              sid = String(sid);
+              clearTimeout(hovTimer);
+              hovTimer = setTimeout(function(){
+                try{
+                  var st = window.__STATIONS_BY_ID && window.__STATIONS_BY_ID.get(sid);
+                  if (st && window.__ensureStationComputed) window.__ensureStationComputed(st);
+                }catch(_){}
+              }, 120);
+              return;
+            }
+          }
+        }
+      }catch(_){}
+    }, true);
+  }catch(_){}
+
+})();
+</script>
+
+<!-- === MLG PERF PATCH v6: Aggressive concurrency (global/per-host limiter + in-flight de-dup) — 2025-11-10 === -->
+<script id="mlg-perf-ultra-concurrency-v6">
+(function(){
+  // Globals
+  window.__FETCH_EPOCH = (window.__FETCH_EPOCH||0) + 1;  // bump once on page load
+  var CORES = (navigator && navigator.hardwareConcurrency) || 4;
+  // Allow manual override via window.__MLG_MAX_CONC / __MLG_HOST_CONC
+  var MAX_GLOBAL = Math.min(72, Math.max(24, (window.__MLG_MAX_CONC || (CORES*5))));
+  var MAX_PER_HOST = Math.min(48, Math.max(12, (window.__MLG_HOST_CONC || (CORES*3))));
+
+  // Domain/Global limiter + in-flight de-dup
+  var activeGlobal = 0;
+  var activePerHost = new Map();
+  var q = [];
+  var inFlight = new Map(); // url -> Promise
+  function hostOf(url){
+    try { return new URL(url, location.href).host; } catch(_){ return 'default'; }
+  }
+  function schedule(){
+    // drain while capacity
+    while (q.length && activeGlobal < MAX_GLOBAL){
+      // pick first job whose host has capacity
+      var idx = -1;
+      for (var i=0;i<q.length;i++){
+        var h = q[i].host;
+        var ah = activePerHost.get(h) || 0;
+        if (ah < MAX_PER_HOST){ idx = i; break; }
+      }
+      if (idx === -1) break;
+      var job = q.splice(idx,1)[0];
+      activeGlobal++;
+      activePerHost.set(job.host, (activePerHost.get(job.host)||0)+1);
+      (function(job){
+        var done = function(){
+          activeGlobal--;
+          activePerHost.set(job.host, Math.max(0,(activePerHost.get(job.host)||1)-1));
+          schedule();
+        };
+        Promise.resolve().then(job.run).then(function(res){ job.resolve(res); done(); }, function(err){ job.reject(err); done(); });
+      })(job);
+    }
+  }
+  function enqueue(url, runner){
+    var h = hostOf(url);
+    return new Promise(function(resolve, reject){
+      q.push({host:h, run: runner, resolve: resolve, reject: reject});
+      schedule();
+    });
+  }
+
+  // Limited fetch via original fetchJSON (keeps headers/logic) with timeout and de-dup
+  var _fetchJSON = window.fetchJSON;
+  function limitedFetch(url, timeoutMs){
+    // de-dup identical URLs
+    if (inFlight.has(url)){
+      return inFlight.get(url);
+    }
+    var p = enqueue(url, function(){
+      return new Promise(function(resolve, reject){
+        // race with timeout
+        var to = null;
+        var timedOut = false;
+        try{
+          if (timeoutMs && timeoutMs>0){
+            to = setTimeout(function(){ timedOut = true; try{ inFlight.delete(url); }catch(_){ } reject(new Error('timeout '+timeoutMs)); }, timeoutMs);
+          }
+          (_fetchJSON ? _fetchJSON(url, timeoutMs) : fetch(url).then(function(r){ return r.json(); })).then(function(res){
+            if (to) clearTimeout(to);
+            if (timedOut){ return; }
+            try{ inFlight.delete(url); }catch(_){}
+            resolve(res);
+          }).catch(function(err){
+            if (to) clearTimeout(to);
+            try{ inFlight.delete(url); }catch(_){}
+            reject(err);
+          });
+        }catch(e){
+          if (to) clearTimeout(to);
+          try{ inFlight.delete(url); }catch(_){}
+          reject(e);
+        }
+      });
+    });
+    inFlight.set(url, p);
+    return p;
+  }
+
+  // Abort/ignore strategy on map moves: increase epoch and ignore stale results
+  try{
+    var m = (window._mlgMap || window.map);
+    if (m && m.on){
+      m.on('movestart zoomstart', function(){ window.__FETCH_EPOCH++; });
+    } else {
+      setTimeout(function(){ var mm = (window._mlgMap || window.map); if (mm && mm.on){ mm.on('movestart zoomstart', function(){ window.__FETCH_EPOCH++; }); } }, 300);
+    }
+  }catch(_){}
+
+  // Wrap fetchForCenter to use limitedFetch and ignore stale epochs
+  try{
+    if (typeof window.fetchForCenter === 'function' && typeof window.buildURL === 'function'){
+      (function(){
+        var _orig = window.fetchForCenter;
+        var _buildURL = window.buildURL;
+        var _buildMinimalQ = window.buildMinimalQ;
+        var _buildStableQ = window.buildStableQ;
+        window.fetchForCenter = function(center, fromStr, toStr){
+          var epoch = window.__FETCH_EPOCH;
+          try{
+            // Construct both minimal + stable and fire them through limiter
+            var qMin = _buildMinimalQ && _buildMinimalQ(fromStr, toStr);
+            var qStb = _buildStableQ && _buildStableQ(fromStr, toStr);
+            var uMin = qMin ? _buildURL(center, qMin) : null;
+            var uStb = qStb ? _buildURL(center, qStb) : null;
+            var pMin = uMin ? limitedFetch(uMin, 6000).then(function(res){
+              if (epoch !== window.__FETCH_EPOCH) throw new Error('stale-epoch');
+              var list = Array.isArray(res)? res : (res.stations || res.data || res.results || []);
+              return {center:center, list:list, variant:'minimal'};
+            }) : Promise.reject(new Error('no-minimal'));
+            var pStb = uStb ? limitedFetch(uStb, 12000).then(function(res){
+              if (epoch !== window.__FETCH_EPOCH) throw new Error('stale-epoch');
+              var list = Array.isArray(res)? res : (res.stations || res.data || res.results || []);
+              return {center:center, list:list, variant:'stable'};
+            }) : Promise.reject(new Error('no-stable'));
+            // first paint with minimal OR stable, whichever comes first
+            return Promise.any([pMin, pStb]).then(function(first){ return first; }).catch(function(){ return pMin; })
+              .then(function(first){
+                // background upgrade to whichever wasn't first, ignoring stale
+                Promise.resolve().then(function(){
+                  var bg = (first.variant==='minimal') ? pStb : pMin;
+                  bg.then(function(_){ /* handled elsewhere by upgrade logic (v1) */ }).catch(function(_){ });
+                });
+                return first;
+              });
+          }catch(_){
+            return _orig(center, fromStr, toStr);
+          }
+        };
+      })();
+    }
+  }catch(_){}
+
+  // Also wrap pMap to crank concurrency if still used elsewhere
+  try{
+    var __pMap = window.pMap;
+    if (typeof __pMap === 'function'){
+      window.pMap = function(items, mapper, opts){
+        opts = opts || {};
+        var conc = opts.concurrency == null ? 0 : Number(opts.concurrency)||0;
+        if (!conc || conc < MAX_GLOBAL) opts.concurrency = MAX_GLOBAL;
+        return __pMap(items, mapper, opts);
+      };
+    }
+  }catch(_){}
+
+  // Expose knobs for debugging
+  window.__MLG_DEBUG_CONC = {
+    MAX_GLOBAL: MAX_GLOBAL,
+    MAX_PER_HOST: MAX_PER_HOST,
+    queueLen: function(){ return q.length; },
+    inFlightLen: function(){ return (inFlight ? inFlight.size : 0); }
+  };
+})();
+</script>
+
+<!-- === MLG PERF PATCH v7: Dual-vendor concurrent fetch (MeteoHub + WUnderground) — 2025-11-10 === -->
+<script id="mlg-perf-dual-vendor-v7">
+(function(){
+  // Helpers to craft vendor-specific URLs
+  function uniq(arr){ var s=new Set(); var out=[]; for (var i=0;i<arr.length;i++){ var v=arr[i]; if (!v) continue; if (s.has(v)) continue; s.add(v); out.push(v); } return out; }
+  function replaceAll(str, map){
+    var out = String(str);
+    for (var k in map){ out = out.split(k).join(map[k]); }
+    return out;
+  }
+  function addOrReplaceParam(url, key, val){
+    try{
+      var u = new URL(url, location.href);
+      u.searchParams.set(key, val);
+      return u.toString();
+    }catch(_){
+      // naive fallback
+      var sep = url.indexOf('?')===-1 ? '?' : '&';
+      var re = new RegExp('([?&])'+key+'=[^&#]*');
+      if (re.test(url)) return url.replace(re, '$1'+key+'='+encodeURIComponent(val));
+      return url + sep + key + '=' + encodeURIComponent(val);
+    }
+  }
+  function vendorize(url, vendor){
+    if (!url) return null;
+    var out = url;
+    // try common query keys
+    var keys = ['vendor','source','provider','platform','type'];
+    for (var i=0;i<keys.length;i++){
+      out = addOrReplaceParam(out, keys[i], vendor);
+    }
+    // also path/host replacements
+    out = replaceAll(out, {
+      'meteohub': vendor==='meteohub' ? 'meteohub' : 'wunderground',
+      'wunderground': vendor==='meteohub' ? 'meteohub' : 'wunderground',
+      'wug': vendor==='meteohub' ? 'meteohub' : 'wug'
+    });
+    return out;
+  }
+  function pairForVendors(url){
+    var mh = vendorize(url, 'meteohub');
+    var wug = vendorize(url, 'wunderground');
+    return uniq([mh, wug]);
+  }
+  function stKey(st){
+    if(!st) return '';
+    var id = st.id || st.code || st.stationId || st.station_id || st.name || '';
+    var la = (st.lat!=null? Number(st.lat).toFixed(5) : '');
+    var lo = (st.lon!=null? Number(st.lon).toFixed(5) : '');
+    return String(id)+'@'+la+','+lo;
+  }
+
+  var _fetchJSON = window.fetchJSON;
+  var _limited = (typeof window.limitedFetch === 'function') ? window.limitedFetch : function(url, t){ return (_fetchJSON ? _fetchJSON(url, t) : fetch(url).then(function(r){return r.json();})); };
+
+  // Merge helper: render only new stations (de-dup by key), rely on existing renderStations override for performance
+  function mergeRender(list){
+    try{
+      var seen = window.__MH_SEEN || new Set(); // same set used earlier for de-dup
+      var add = [];
+      for (var i=0;i<(list||[]).length;i++){
+        var s=list[i]; if(!s) continue;
+        if (!isFinite(s.lat)||!isFinite(s.lon)) continue;
+        var k = stKey(s);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        add.push(s);
+      }
+      if (add.length){
+        try{ window.renderStations(add); }catch(_){}
+      }
+      window.__MH_SEEN = seen;
+    }catch(_){}
+  }
+
+  // Override fetchForCenter to fetch both vendors in parallel
+  try{
+    if (typeof window.fetchForCenter === 'function' && typeof window.buildURL === 'function'){
+      (function(){
+        var _orig = window.fetchForCenter;
+        var _buildURL = window.buildURL;
+        var _buildMinimalQ = window.buildMinimalQ;
+        var _buildStableQ = window.buildStableQ;
+        window.fetchForCenter = function(center, fromStr, toStr){
+          var epoch = window.__FETCH_EPOCH || 0;
+          try{
+            var qMin = _buildMinimalQ && _buildMinimalQ(fromStr, toStr);
+            var qStb = _buildStableQ && _buildStableQ(fromStr, toStr);
+            var uMin = qMin ? _buildURL(center, qMin) : null;
+            var uStb = qStb ? _buildURL(center, qStb) : null;
+
+            var urls = [];
+            if (uMin) urls = urls.concat(pairForVendors(uMin));
+            if (uStb) urls = urls.concat(pairForVendors(uStb));
+            urls = uniq(urls);
+
+            if (!urls.length) return _orig(center, fromStr, toStr);
+
+            // fire all vendor/variant URLs through limited fetch
+            var tasks = urls.map(function(u){
+              var tmo = /minimal/i.test(u) ? 6000 : 12000;
+              return _limited(u, tmo).then(function(res){
+                if (epoch !== (window.__FETCH_EPOCH||0)) throw new Error('stale-epoch');
+                var list = Array.isArray(res)? res : (res.stations || res.data || res.results || []);
+                return {url:u, list:list, variant: /minimal/i.test(u) ? 'minimal' : 'stable'};
+              });
+            });
+
+            // Resolve fast with the first to return (any vendor+variant)
+            return Promise.any(tasks).then(function(first){
+              // Background: merge the others as they arrive
+              tasks.forEach(function(p){
+                p.then(function(r){
+                  if (r !== first && r && r.list) mergeRender(r.list);
+                }).catch(function(_){ /* ignored */ });
+              });
+              return {center:center, list:first.list, variant:first.variant};
+            }).catch(function(err){
+              // If all failed, fallback
+              return _orig(center, fromStr, toStr);
+            });
+          }catch(_){
+            return _orig(center, fromStr, toStr);
+          }
+        };
+      })();
+    }
+  }catch(_){}
+
+})();
+</script>
+
+<!-- === MLG PERF PATCH v8: FORCE parallel MeteoHub+WUnderground start — 2025-11-10 === -->
+<script id="mlg-perf-dual-vendor-v8">
+(function(){
+  // 0) Make sure we have a public limitedFetch that actually fires requests immediately
+  try{
+    if (!window.limitedFetch){
+      window.limitedFetch = function(url, timeoutMs){
+        // Use native fetch for strict parallelism; fall back to fetchJSON if needed for auth headers
+        var p;
+        try{
+          p = fetch(url, {cache: 'no-store'}).then(function(r){ return r.json(); });
+        }catch(_){
+          p = (window.fetchJSON ? window.fetchJSON(url, timeoutMs) : fetch(url).then(function(r){ return r.json(); }));
+        }
+        if (!timeoutMs) return p;
+        return Promise.race([
+          p,
+          new Promise(function(_res, rej){ setTimeout(function(){ rej(new Error('timeout '+timeoutMs)); }, timeoutMs); })
+        ]);
+      };
+    }
+  }catch(_){}
+
+  // 1) Helpers to craft vendor URLs and avoid dedup (cache-bust + vendor flag)
+  function addParam(url, key, val){
+    try{
+      var u = new URL(url, location.href);
+      u.searchParams.set(key, val);
+      return u.toString();
+    }catch(_){
+      var sep = url.indexOf('?')===-1 ? '?' : '&';
+      var re = new RegExp('([?&])'+key+'=[^&#]*');
+      if (re.test(url)) return url.replace(re, '$1'+key+'='+encodeURIComponent(val));
+      return url + sep + key + '=' + encodeURIComponent(val);
+    }
+  }
+  function vendorURL(base, vendor){
+    var out = String(base||'');
+    // Common vendor hints
+    out = addParam(out,'vendor', vendor);
+    out = addParam(out,'source', vendor);
+    out = addParam(out,'provider', vendor);
+    // Small cache-bust to ensure distinct-URL and bypass in-flight de-dup
+    out = addParam(out,'_vnd', vendor);
+    out = addParam(out,'_burst', (window.__FETCH_EPOCH||0) + '-' + Math.random().toString(36).slice(2));
+    return out;
+  }
+  function buildVendorURLs(center, fromStr, toStr){
+    var baseMin=null, baseStb=null;
+    try{
+      if (typeof window.buildURL === 'function' && typeof window.buildMinimalQ === 'function' && typeof window.buildStableQ === 'function'){
+        baseMin = window.buildURL(center, window.buildMinimalQ(fromStr,toStr));
+        baseStb = window.buildURL(center, window.buildStableQ(fromStr,toStr));
+      }
+      // Prefer dedicated vendor builders if available
+      if (typeof window.buildURLForVendor === 'function'){
+        baseMin = window.buildURLForVendor(center, 'minimal', fromStr, toStr) || baseMin;
+        baseStb = window.buildURLForVendor(center, 'stable',  fromStr, toStr) || baseStb;
+      }
+    }catch(_){}
+    var urls = [];
+    [baseMin, baseStb].forEach(function(b){
+      if (!b) return;
+      urls.push(vendorURL(b,'meteohub'));
+      urls.push(vendorURL(b,'wunderground'));
+    });
+    return urls;
+  }
+
+  function toList(res){
+    if (Array.isArray(res)) return res;
+    return (res && (res.stations || res.data || res.results)) || [];
+  }
+
+  // 2) Hard override: fire MeteoHub+WUnderground truly together, resolve on first, merge the rest
+  try{
+    if (typeof window.fetchForCenter === 'function'){
+      (function(){
+        var _orig = window.fetchForCenter;
+        window.fetchForCenter = function(center, fromStr, toStr){
+          var epoch = window.__FETCH_EPOCH || 0;
+          var urls = buildVendorURLs(center, fromStr, toStr);
+          if (!urls || !urls.length) return _orig(center, fromStr, toStr);
+
+          // Kick everything NOW (no awaits before loop)
+          var tasks = [];
+          for (var i=0;i<urls.length;i++){
+            (function(u){
+              var tmo = /minimal/i.test(u) ? 6000 : 12000;
+              var task = window.limitedFetch(u, tmo).then(function(res){
+                if (epoch !== (window.__FETCH_EPOCH||0)) throw new Error('stale-epoch');
+                return {u:u, list: toList(res), variant: /minimal/i.test(u) ? 'minimal' : 'stable'};
+              });
+              tasks.push(task);
+            })(urls[i]);
+          }
+
+          // First-paint as soon as qualcosa rientra
+          var first = Promise.any(tasks).then(function(win){
+            try{
+              // merge the others silently
+              tasks.forEach(function(p){
+                p.then(function(r){
+                  if (r !== win && r && r.list && r.list.length){
+                    try{ window.renderStations(r.list); }catch(_){}
+                  }
+                }).catch(function(_){ });
+              });
+            }catch(_){}
+            return {center:center, list: win.list, variant: win.variant};
+          }).catch(function(_){
+            return _orig(center, fromStr, toStr);
+          });
+
+          return first;
+        };
+      })();
+    }
+  }catch(_){}
+
+  // 3) Safety: bump per-host/global concurrency ceilings for this session
+  try{
+    window.__MLG_MAX_CONC = Math.max(window.__MLG_MAX_CONC||0, 96);
+    window.__MLG_HOST_CONC = Math.max(window.__MLG_HOST_CONC||0, 64);
+  }catch(_){}
+
+})();
+</script>
+
+<!-- === Sezione visibile in fondo che carica automaticamente meteologullo.com === -->
+<section id="mlg-bottom-embed" aria-labelledby="mlg-bottom-title">
+  <h2 id="mlg-bottom-title">meteologullo.com</h2>
+  <iframe
+    id="mlg-bottom-iframe"
+    class="mlg-iframe"
+    src="https://www.meteologullo.com/"
+    title="Contenuto di meteologullo.com"
+    loading="eager"
+   tabindex="-1"></iframe>
+  <div class="mlg-fallback">
+    Se non vedi il sito incorporato, <a href="https://www.meteologullo.com/" target="_blank" rel="noopener">apri meteologullo.com in una nuova scheda</a>.
+  </div>
+</section>
+
+
+
+<script id="mlg-bottom-embed-js">
+  (function(){
+    var ifr = document.getElementById('mlg-bottom-iframe');
+    if (!ifr) return;
+    // Best-effort log in console; non intrusivo
+    ifr.addEventListener('load', function(){ try{ console.debug('[mlg] meteologullo.com iframe loaded'); }catch(e){} });
+  })();
+</script>
+
 
 </body>
 </html>
