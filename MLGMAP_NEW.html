@@ -1857,7 +1857,17 @@ function bubbleMarker(st){
     return base.toString();
   }
   function fetchJSON(u, timeoutMs){
-    if (timeoutMs==null) timeoutMs = 15000;
+    // Timeout adattivo: per Meteohub alziamo un po' l'asticella,
+    // per il resto manteniamo il default originale di 15s.
+    var _u = (u == null ? '' : String(u));
+    var isMeteohub = /meteohub\.agenziaitaliameteo\.it/i.test(_u);
+    if (timeoutMs == null) {
+      timeoutMs = isMeteohub ? 45000 : 15000;
+    } else if (isMeteohub && timeoutMs < 45000) {
+      // Se qualcuno chiede timeout più corti su Meteohub, li portiamo a 45s
+      timeoutMs = 45000;
+    }
+
     return new Promise(function(resolve, reject){
       var ctrl = new AbortController();
       var t = setTimeout(function(){ try{ctrl.abort();}catch(e){} reject(new Error("timeout")); }, timeoutMs);
@@ -2532,7 +2542,17 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
 
   // Simple fetch with timeout
   function fetchJSON(u, timeoutMs){
-    if (timeoutMs==null) timeoutMs = 15000;
+    // Timeout adattivo: per Meteohub alziamo un po' l'asticella,
+    // per il resto manteniamo il default originale di 15s.
+    var _u = (u == null ? '' : String(u));
+    var isMeteohub = /meteohub\.agenziaitaliameteo\.it/i.test(_u);
+    if (timeoutMs == null) {
+      timeoutMs = isMeteohub ? 45000 : 15000;
+    } else if (isMeteohub && timeoutMs < 45000) {
+      // Se qualcuno chiede timeout più corti su Meteohub, li portiamo a 45s
+      timeoutMs = 45000;
+    }
+
     return new Promise(function(resolve, reject){
       var ctrl = new AbortController();
       var t = setTimeout(function(){ try{ctrl.abort();}catch(e){} reject(new Error("timeout")); }, timeoutMs);
@@ -4320,7 +4340,7 @@ function refreshUi(){
             var qMin = (window.buildMinimalQ && window.buildMinimalQ(fromStr, toStr)) || null;
             var uMin = (window.buildURL && qMin)? window.buildURL(center, qMin) : null;
             if (uMin){
-              var minimalProbe = _fetchJSON(uMin, 6000).then(function(resMin){
+              var minimalProbe = _fetchJSON(uMin, 20000).then(function(resMin){
                 var listMin = Array.isArray(resMin)? resMin : (resMin.stations || resMin.data || resMin.results || []);
                 return {center:center, list:listMin, variant:'minimal'};
               });
@@ -4979,7 +4999,7 @@ function refreshUi(){
             var qStb = _buildStableQ && _buildStableQ(fromStr, toStr);
             var uMin = qMin ? _buildURL(center, qMin) : null;
             var uStb = qStb ? _buildURL(center, qStb) : null;
-            var pMin = uMin ? limitedFetch(uMin, 6000).then(function(res){
+            var pMin = uMin ? limitedFetch(uMin, 20000).then(function(res){
               if (epoch !== window.__FETCH_EPOCH) throw new Error('stale-epoch');
               var list = Array.isArray(res)? res : (res.stations || res.data || res.results || []);
               return {center:center, list:list, variant:'minimal'};
@@ -5130,7 +5150,7 @@ function refreshUi(){
 
             // fire all vendor/variant URLs through limited fetch
             var tasks = urls.map(function(u){
-              var tmo = /minimal/i.test(u) ? 6000 : 12000;
+              var tmo = /minimal/i.test(u) ? 20000 : 30000;
               return _limited(u, tmo).then(function(res){
                 if (epoch !== (window.__FETCH_EPOCH||0)) throw new Error('stale-epoch');
                 var list = Array.isArray(res)? res : (res.stations || res.data || res.results || []);
@@ -5250,7 +5270,7 @@ function refreshUi(){
           var tasks = [];
           for (var i=0;i<urls.length;i++){
             (function(u){
-              var tmo = /minimal/i.test(u) ? 6000 : 12000;
+              var tmo = /minimal/i.test(u) ? 20000 : 30000;
               var task = window.limitedFetch(u, tmo).then(function(res){
                 if (epoch !== (window.__FETCH_EPOCH||0)) throw new Error('stale-epoch');
                 return {u:u, list: toList(res), variant: /minimal/i.test(u) ? 'minimal' : 'stable'};
