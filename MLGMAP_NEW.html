@@ -1857,15 +1857,21 @@ function bubbleMarker(st){
     return base.toString();
   }
   function fetchJSON(u, timeoutMs){
-    // Timeout adattivo: per Meteohub alziamo un po' l'asticella,
+    // Timeout adattivo: per Meteohub estendiamo la finestra,
     // per il resto manteniamo il default originale di 15s.
     var _u = (u == null ? '' : String(u));
     var isMeteohub = /meteohub\.agenziaitaliameteo\.it/i.test(_u);
-    if (timeoutMs == null) {
-      timeoutMs = isMeteohub ? 45000 : 15000;
-    } else if (isMeteohub && timeoutMs < 45000) {
-      // Se qualcuno chiede timeout più corti su Meteohub, li portiamo a 45s
-      timeoutMs = 45000;
+    if (isMeteohub){
+      // Per Meteohub non abbassiamo mai il timeout: se mancante o troppo corto lo portiamo a 120s
+      if (timeoutMs == null || timeoutMs <= 0){
+        timeoutMs = 120000;
+      } else if (timeoutMs < 120000){
+        timeoutMs = 120000;
+      }
+    }else{
+      if (timeoutMs == null || timeoutMs <= 0){
+        timeoutMs = 15000;
+      }
     }
 
     return new Promise(function(resolve, reject){
@@ -2193,16 +2199,21 @@ for (const st of wu.list){
               const m = bubbleMarker(st).addTo(map);
               try{
                 if (window.fetchDailyExtremes && st.id){
-                  const ex = await window.fetchDailyExtremes(st.id);
-                  if (ex){
-                    if (ex.min != null) st.tMin = ex.min;
-                    if (ex.max != null) st.tMax = ex.max;
-                    try{ m.setPopupContent(buildPopupHTML(st)); }catch(_){}
-                    try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){}
-                  }
+                  // lancio in parallelo, senza bloccare il ciclo principale
+                  window.fetchDailyExtremes(st.id).then(function(ex){
+                    try{
+                      if (ex){
+                        if (ex.min != null) st.tMin = ex.min;
+                        if (ex.max != null) st.tMax = ex.max;
+                        try{ m.setPopupContent(buildPopupHTML(st)); }catch(_){}
+                        try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){}
+                      }
+                    }catch(_){}
+                  }).catch(function(_){});
                 }
               }catch(_){}
-            }
+
+}
           }
           try{
             var pill = '<span class="pill"><span class="dot" style="background:'+WU_COLOR+'"></span><b>WUnderground PWS</b>: '+(wu && (wu.count||0))+' stazioni</span>';
@@ -2222,7 +2233,7 @@ for (const st of wu.list){
         return {center:c, norm:norm, variant:r.variant};
       });
     }, {
-      concurrency: 10,
+      concurrency: Math.min(CENTERS.length, 24),
       onEach: function(item, idx){
         var isErr = item && item.error;
         if (!isErr){
@@ -2236,33 +2247,10 @@ renderStations(item.norm);
         updateLegend(progress);
       }
     }).then(function(){
-      fetchWUAll().then(async function(wu){
-        if (wu.list && wu.list.length){
-          try{ if(__cachePkg) __cachePkg.wu = {list:(wu.list||[]), count:(wu.count||((wu.list&&wu.list.length)||0))}; }catch(_){}
- try{ if (window.__stationProgress) window.__stationProgress.incExpected(wu.list.length); }catch(_){} console.debug("[WU][EXT] stations ready:", wu.list.length);
-          for (const st of wu.list){ console.debug("[WU][EXT] station:", st.id, st.label);
-            const m = bubbleMarker(st).addTo(map);
-            try{
-              if (window.fetchDailyExtremes && st.id){
-                const ex = await window.fetchDailyExtremes(st.id);
-                if (ex && (ex.min!=null || ex.max!=null)){
-                  st.tMin = (ex.min!=null ? ex.min : st.tMin);
-                  st.tMax = (ex.max!=null ? ex.max : st.tMax);
-                  m.setPopupContent(buildPopupHTML(st)); try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){ }
-                }
-              }
-            }catch(e){ console.warn("WU extremes update", st.id, e); }
-          }
-        }
-        try{
-          var pill = '<span class="pill"><span class="dot" style="background:'+WU_COLOR+'"></span><b>WUnderground PWS</b>: '+(wu.count||0)+' stazioni</span>';
-          var el = document.getElementById('note');
-          el.innerHTML = el.innerHTML + pill;
-        }catch(e){}
-        statusEl.textContent = "";
-        try{ if(window.renderRanking) window.renderRanking(); }catch(_){ }
-      }).catch(function(){ statusEl.textContent = "";
-        try{ if(window.renderRanking) window.renderRanking(); }catch(_){ } });
+      try{
+        centersDone = true;
+        __doneIfBoth();
+      }catch(_){ }
     });
   }
 
@@ -4943,16 +4931,32 @@ function refreshUi(){
     if (inFlight.has(url)){
       return inFlight.get(url);
     }
+    // Per MeteoHub non abbassiamo mai il timeout: se è più corto di 45s, lo alziamo
+    var effTimeout = timeoutMs;
+    try{
+      var isMeteohub = /meteohub\.agenziaitaliameteo\.it/i.test(String(url||''));
+      if (isMeteohub){
+        if (!effTimeout || effTimeout <= 0){
+          effTimeout = 45000;
+        }else if (effTimeout < 45000){
+          effTimeout = 45000;
+        }
+      }
+    }catch(_){}
     var p = enqueue(url, function(){
       return new Promise(function(resolve, reject){
         // race with timeout
         var to = null;
         var timedOut = false;
         try{
-          if (timeoutMs && timeoutMs>0){
-            to = setTimeout(function(){ timedOut = true; try{ inFlight.delete(url); }catch(_){ } reject(new Error('timeout '+timeoutMs)); }, timeoutMs);
+          if (effTimeout && effTimeout>0){
+            to = setTimeout(function(){
+              timedOut = true;
+              try{ inFlight.delete(url); }catch(_){ }
+              reject(new Error('timeout '+effTimeout));
+            }, effTimeout);
           }
-          (_fetchJSON ? _fetchJSON(url, timeoutMs) : fetch(url).then(function(r){ return r.json(); })).then(function(res){
+          (_fetchJSON ? _fetchJSON(url, effTimeout) : fetch(url).then(function(r){ return r.json(); })).then(function(res){
             if (to) clearTimeout(to);
             if (timedOut){ return; }
             try{ inFlight.delete(url); }catch(_){}
@@ -4972,8 +4976,7 @@ function refreshUi(){
     inFlight.set(url, p);
     return p;
   }
-
-  // Abort/ignore strategy on map moves: increase epoch and ignore stale results
+lts
   try{
     var m = (window._mlgMap || window.map);
     if (m && m.on){
@@ -5243,11 +5246,15 @@ function refreshUi(){
       }
     }catch(_){}
     var urls = [];
-    [baseMin, baseStb].forEach(function(b){
-      if (!b) return;
-      urls.push(vendorURL(b,'meteohub'));
-      urls.push(vendorURL(b,'wunderground'));
-    });
+    // Per Meteohub usiamo solo la query "minimal" (più leggera) per ridurre latenza,
+    // mentre per WUnderground manteniamo sia minimal che stable.
+    if (baseMin){
+      urls.push(vendorURL(baseMin,'meteohub'));
+      urls.push(vendorURL(baseMin,'wunderground'));
+    }
+    if (baseStb){
+      urls.push(vendorURL(baseStb,'wunderground'));
+    }
     return urls;
   }
 
