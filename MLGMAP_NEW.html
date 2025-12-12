@@ -122,6 +122,8 @@
 .meteo-toolbar .sb-btn.active{ background:#60a5fa; color:#03102b; border-color:#60a5fa; text-shadow:none; }
 .meteo-toolbar .sb-btn.small{ font-size:11px; }
 
+
+#map .mlg-corner-logo img{ pointer-events:none !important; }
 </style>
 
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
@@ -625,10 +627,12 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
   position:absolute;
   right: 36px;  /* v7: 42px */
   bottom: calc(68px + env(safe-area-inset-bottom, 0px)); /* v7: 76px */
+  pointer-events: none; /* allow map interactions through logo */
   z-index:650;
   display:inline-flex; align-items:center; justify-content:center;
   padding:0; background: transparent; border:0; box-shadow:none;
   text-decoration:none;
+  pointer-events: none !important;
 }
 #map .mlg-corner-logo img{
   height:128px; width:auto; display:block;
@@ -1840,7 +1844,7 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
   }
 function bubbleMarker(st){
     var m = L.marker([st.lat, st.lon], {icon: bubbleIcon(st.t)}); try{m.__isStation=true;}catch(e){};
-    m.bindPopup(buildPopupHTML(st));
+    m.bindPopup(buildPopupHTML(st), {autoPan:false, keepInView:false, closeOnClick:true, autoClose:true});
     return m;
   }
 
@@ -2063,6 +2067,17 @@ function bubbleMarker(st){
     { id: "IROGGI1",  label: "Roggiano Gravina", lat: 39.61492, lon: 16.15835 },
     { id: "IMENDI25",  label: "Mendicino - Volpicchie", lat: 39.249315, lon: 16.153332 },
 ];
+
+  // Expose WU config globally (used by graphs script loaded in a different scope)
+  try{
+    var __w = (typeof window!=='undefined') ? window : null;
+    if(__w){
+      __w.MLG_WU = __w.MLG_WU || {};
+      __w.MLG_WU.API_KEY = WU_API_KEY;
+      __w.MLG_WU.STATIONS = WU_STATIONS;
+    }
+  }catch(e){}
+
   const WU_COLOR = "#111827";
   function numOrNull(v){ if (v === null || v === undefined) return null; var n = parseFloat(v); return isNaN(n)? null : n; }
   function fetchWUStation(stId, apiKey, customLabel, overrideLat, overrideLon){
@@ -2077,6 +2092,7 @@ function bubbleMarker(st){
       if (!o) return null;
       const met = o.metric || {};
       return {
+        source: 'wu',
         id: o.stationID || stId,
         lat: (numOrNull(overrideLat) != null ? numOrNull(overrideLat) : Number(o.lat)),
         lon: (numOrNull(overrideLon) != null ? numOrNull(overrideLon) : Number(o.lon)),
@@ -2299,6 +2315,22 @@ renderStations(item.norm);
     var noWG    = !(st && st.wg != null && isFinite(Number(st.wg)));
     st.__rainOnly = !!(hasRain && noTemp && noRH && noWS && noWG);
 
+
+    // Stable per-marker id + source (needed to route graphs to the correct backend)
+    try{
+      var _baseId = (st && (st.id || st.stationId || st.station_id || st.code)) || null;
+      var _src = (st && (st.source || st.src || st.provider || '')) || '';
+      var _srcL = String(_src).toLowerCase();
+      var _prefix = 'mh';
+      if (_srcL.indexOf('meteohub')>=0) _prefix = 'mh';
+      else if (_srcL.indexOf('wu')>=0 || _srcL.indexOf('wunderground')>=0) _prefix = 'wu';
+      else if (_baseId && /^I[A-Z0-9]{3,}$/i.test(String(_baseId))) _prefix = 'wu';
+      if (st && !st.source){
+        st.source = (_prefix === 'wu') ? 'wu' : 'meteohub';
+      }
+      m.__src = _prefix;
+      m.__sid = _prefix + ':' + String(_baseId || (m && m._leaflet_id) || '');
+    }catch(_){}
     m.__station = st; window.__ALL_MARKERS.push(m);
   }catch(_){}
   try{ if(window.__scheduleRanking) window.__scheduleRanking(); }catch(_){}
@@ -3249,21 +3281,23 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
 
 <script>
 (function(){
-  function disableLogoInteractions(){
+  // Make the corner logo completely "transparent" to touch/mouse interactions (mobile-friendly)
+  function passthroughLogo(){
     var nodes = Array.prototype.slice.call(document.querySelectorAll('#map .mlg-corner-logo'));
     nodes.forEach(function(el){
-      try{ el.removeAttribute('href'); }catch(_){}
+      try{ el.style.pointerEvents = 'none'; }catch(_){}
+      try{
+        var img = el.querySelector('img');
+        if(img) img.style.pointerEvents = 'none';
+      }catch(_){}
+      // keep it non-focusable
       try{ el.setAttribute('tabindex','-1'); el.setAttribute('aria-hidden','true'); }catch(_){}
-      var stopper = function(ev){ ev.preventDefault(); ev.stopPropagation(); return false; };
-      ['click','pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','keydown'].forEach(function(evt){
-        el.addEventListener(evt, stopper, true);
-      });
     });
   }
   if (document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', disableLogoInteractions);
+    document.addEventListener('DOMContentLoaded', passthroughLogo);
   } else {
-    disableLogoInteractions();
+    passthroughLogo();
   }
 })();
 </script>
@@ -5354,6 +5388,1371 @@ lts
   })();
 </script>
 
+
+
+<!-- === MLG FEATURE PATCH: Grafici nei popup (lazy-load, state stabile su marker) — 2025-12-12 === -->
+<style id="mlg-graphs-css">
+  .mlg-pop-actions{display:flex;justify-content:flex-end;align-items:center;margin-top:4px}
+  .mlg-graph-toggle{
+    appearance:none;border:0;background:transparent;padding:0;
+    font-size:11px;line-height:1;
+    color:#0b65c2;text-decoration:underline;
+    cursor:pointer;
+  }
+  .mlg-graph-toggle:hover{opacity:.85}
+  .mlg-graph-panel{
+    max-height:0;opacity:0;overflow:hidden;margin-top:0;
+    transition:max-height .25s ease, opacity .18s ease, margin-top .25s ease;
+    border-top:1px solid rgba(0,0,0,.08);
+  }
+  .mlg-graph-panel.open{max-height:320px;opacity:1;margin-top:6px;padding-top:6px}
+  .mlg-graph-toolbar{display:flex;gap:4px;flex-wrap:nowrap;margin-bottom:6px;align-items:center}
+  .mlg-graph-param{
+    flex:1 1 0;
+    min-width:0;
+    border:1px solid rgba(0,0,0,.12);
+    background:#fff;
+    color:#0b1320;
+    font-weight:800;
+    padding:2px 0;
+    border-radius:999px;
+    font-size:10px;
+    text-align:center;
+    cursor:pointer;
+    user-select:none;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .mlg-graph-param.on{background:rgba(11,101,194,.14);border-color:rgba(11,101,194,.55);color:#0b2f86}
+  @media (max-width:520px){
+    .mlg-graph-toolbar{gap:3px}
+    .mlg-graph-param{font-size:9px;padding:2px 0}
+  }
+  .mlg-graph-area{position:relative;width:100%;height:220px;max-height:45vh}
+  @media (max-width:520px){.mlg-graph-area{height:200px;max-height:42vh}}
+  .mlg-graph-canvas{width:100%;height:100%;display:block;border-radius:10px;background:rgba(0,0,0,.02);touch-action:none;}
+  @media (hover:hover){ .mlg-graph-canvas{ cursor: crosshair; } }
+
+  .mlg-graph-overlay{
+    position:absolute;inset:0;
+    display:flex;align-items:center;justify-content:center;
+    font-size:12px;color:#666;
+    background:rgba(255,255,255,.78);
+    border-radius:10px;
+    padding:10px;
+    text-align:center;
+  }
+  .mlg-graph-overlay[hidden]{display:none !important;}
+
+  .mlg-graph-stats{display:none !important;}
+</style>
+
+<script id="mlg-graphs-js">
+(function(){
+  if (window.__mlgGraphsInstalled) return;
+  window.__mlgGraphsInstalled = true;
+
+  // ---------- helpers ----------
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function fmtHM(d){ try{ return pad(d.getHours())+':'+pad(d.getMinutes()); }catch(_){ return '—'; } }
+  function fmtSpaceUTC(dt){
+    return dt.getUTCFullYear()+'-'+pad(dt.getUTCMonth()+1)+'-'+pad(dt.getUTCDate())+' '+pad(dt.getUTCHours())+':'+pad(dt.getUTCMinutes());
+  }
+  function parseTimeAny(x){
+    if (x == null) return null;
+    // Numbers: treat as epoch (ms or s)
+    if (typeof x === 'number' && isFinite(x)){
+      return new Date(x < 1e12 ? x*1000 : x);
+    }
+    if (x instanceof Date) return isFinite(x) ? x : null;
+
+    var s = String(x).trim();
+    // Pure digits: epoch as string
+    if (/^\d+$/.test(s)){
+      var n = Number(s);
+      if (isFinite(n)) return new Date(n < 1e12 ? n*1000 : n);
+    }
+
+    // Normalize common formats (MeteoHub / WU)
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)){
+      s = s.replace(' ','T');
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s += ':00';
+    }else if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)){
+      s += ':00';
+    }
+
+    var d = new Date(s);
+    return isFinite(d) ? d : null;
+  }
+  function escAttr(s){
+    return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function getStationId(st){
+    return st && (st.id || st.code || st.stationId || st.station_id || st.name || '');
+  }
+  function mapRef(){
+    return window._mlgMap || window.map || null;
+  }
+function relayoutPopup(pop){
+    // Re-layout popup without triggering auto-pan (prevents map move + redraw loops)
+    try{
+      pop = pop || (mapRef() && mapRef()._popup) || null;
+      if (!pop) return;
+      // Leaflet internals: update() may call _adjustPan; we avoid it.
+      if (pop._updateLayout) pop._updateLayout();
+      if (pop._updatePosition) pop._updatePosition();
+    }catch(_){}
+  }
+
+  // Keep-alive guard: if some other code closes/rebuilds the popup right after clicking,
+  // we reopen it and restore the graphs state.
+  var __POP_KEEPALIVE_UNTIL = 0;
+  function armKeepAlive(ms){
+    __POP_KEEPALIVE_UNTIL = Date.now() + (ms || 1200);
+  }
+
+  // Stable key MUST live on marker (station object can be replaced during refresh)
+  function ensureMarkerGraphSid(marker, st){
+    try{
+      if (marker && marker.__mlg_graph_sid) return String(marker.__mlg_graph_sid);
+    }catch(_){}
+    var base = null;
+    try{
+      base = marker && (marker.__sid || marker.__id || marker._leaflet_id);
+    }catch(_){}
+    if (base == null || base === ''){
+      base = (st && (st.code || st.stationId || st.station_id || st.id)) || null;
+    }
+    if (base == null || base === ''){
+      var lat=null, lon=null;
+      try{
+        if (marker && marker.getLatLng){
+          var ll = marker.getLatLng();
+          if (ll){ lat = ll.lat; lon = ll.lng; }
+        }
+      }catch(_){}
+      if (lat==null && st){ lat = st.lat; lon = st.lon; }
+      var la = isFinite(lat) ? Number(lat).toFixed(5) : '';
+      var lo = isFinite(lon) ? Number(lon).toFixed(5) : '';
+      base = 'm@'+la+','+lo;
+    }
+    try{ if (marker) marker.__mlg_graph_sid = String(base); }catch(_){}
+    return String(base);
+  }
+
+  function getActivePopupSource(){
+    try{
+      var m = mapRef();
+      return (m && m._popup && m._popup._source) ? m._popup._source : null;
+    }catch(_){}
+    return null;
+  }
+  function getActivePopupStation(){
+    var src = getActivePopupSource();
+    return (src && src.__station) ? src.__station : null;
+  }
+
+  // ---------- inject "Grafici" into popup HTML without breaking layout ----------
+  function graphsBlockHTML(st){
+    // placeholder sid; we override to marker sid on popupopen anyway
+    var sid = escAttr((function(){
+      var la = isFinite(st && st.lat) ? Number(st.lat).toFixed(5) : '';
+      var lo = isFinite(st && st.lon) ? Number(st.lon).toFixed(5) : '';
+      return 'm@'+la+','+lo;
+    })());
+    return ''
+      + '<div class="mlg-pop-actions">'
+      + '  <button type="button" class="mlg-graph-toggle" data-sid="'+sid+'" aria-expanded="false">Grafici</button>'
+      + '</div>'
+      + '<div class="mlg-graph-panel" data-sid="'+sid+'">'
+      + '  <div class="mlg-graph-toolbar" role="tablist" aria-label="Seleziona parametro">'
+      + '    <button type="button" class="mlg-graph-param on" data-param="temp" role="tab" aria-selected="true">Temp</button>'
+      + '    <button type="button" class="mlg-graph-param" data-param="rh" role="tab" aria-selected="false">UR</button>'
+      + '    <button type="button" class="mlg-graph-param" data-param="wind" role="tab" aria-selected="false" title="Vento">Vnt</button>'
+      + '    <button type="button" class="mlg-graph-param" data-param="gust" role="tab" aria-selected="false" title="Raffica">Raf</button>'
+      + '    <button type="button" class="mlg-graph-param" data-param="rain" role="tab" aria-selected="false" title="Pioggia">Pio</button>'
+      + '  </div>'
+      + '  <div class="mlg-graph-area">'
+      + '    <canvas class="mlg-graph-canvas" height="170"></canvas>'
+      + '    <div class="mlg-graph-overlay" hidden>Caricamento dati…</div>'
+      + '  </div>'
+      + '  <div class="mlg-graph-stats">—</div>'
+      + '</div>';
+  }
+
+  function injectIntoPopupHTML(base, st){
+    if (!base || base.indexOf('mlg-graph-toggle')>=0) return base;
+    var blk = graphsBlockHTML(st);
+    var iWebcam = base.indexOf('class="webcam-slot"');
+    if (iWebcam >= 0){
+      // Inserisci PRIMA dell'apertura del tag webcam, senza spezzare "<div class=...>"
+      var iOpen = base.lastIndexOf('<', iWebcam);
+      if (iOpen < 0) iOpen = iWebcam;
+      return base.slice(0, iOpen) + blk + base.slice(iOpen);
+    }
+    var iTag = base.indexOf('class="arpacal-tag"');
+    if (iTag >= 0){
+      var iSpan = base.lastIndexOf('<span', iTag);
+      if (iSpan >= 0) return base.slice(0, iSpan) + blk + base.slice(iSpan);
+    }
+    return base + blk;
+  }
+
+  // Wrap buildPopupHTML if present (no other logic touched)
+  try{
+    if (typeof window.buildPopupHTML === 'function' && !window.buildPopupHTML.__mlgGraphsWrapped){
+      var _orig = window.buildPopupHTML;
+      var wrapped = function(st){ return injectIntoPopupHTML(_orig(st), st); };
+      wrapped.__mlgGraphsWrapped = true;
+      window.buildPopupHTML = wrapped;
+    }
+  }catch(_){}
+
+  // On popupopen: ensure injected + force stable marker sid onto DOM (so rebuilds remain consistent)
+  try{
+    var map = mapRef();
+    if (map && map.on){
+      // Chiudi davvero il popup quando l'utente clicca/tocca la mappa (fuori dal popup)
+      var __MLG_LAST_MAP_CLICK = 0;
+      map.on('click', function(){ __MLG_LAST_MAP_CLICK = Date.now(); });
+
+      map.on('popupopen', function(e){
+        try{
+          var pop = e && e.popup;
+          // Stabilità: niente auto-pan / auto-close e niente click-through verso la mappa
+          try{
+            if (pop){
+              pop.options = pop.options || {};
+              pop.options.autoPan = false;
+              pop.options.keepInView = false;
+              pop.options.closeOnClick = true;
+              pop.options.autoClose = true;
+            }
+          }catch(_){}
+          try{
+            if (window.L && window.L.DomEvent && pop && pop.getElement){
+              var __pel = pop.getElement();
+              if (__pel){
+                L.DomEvent.disableClickPropagation(__pel);
+                L.DomEvent.disableScrollPropagation(__pel);
+              }
+            }
+          }catch(_){}
+
+          var src = pop && pop._source;
+          var st  = src && src.__station;
+          if (!pop || !src || !st) return;
+
+          var sid = ensureMarkerGraphSid(src, st);
+
+          // Inject into existing HTML string if needed
+          try{
+            var el = pop.getElement && pop.getElement();
+            if (!el || !el.querySelector || !el.querySelector('.mlg-graph-toggle')){
+              var cur = (typeof pop.getContent==='function') ? pop.getContent() : null;
+              if (typeof cur === 'string' && cur){
+                pop.setContent(injectIntoPopupHTML(cur, st));
+                try{ relayoutPopup(pop); }catch(_){}
+              }
+            }
+          }catch(_){}
+
+          // Normalize data-sid to stable marker sid
+          setTimeout(function(){
+            try{
+              var el2 = pop.getElement && pop.getElement();
+              if (!el2) return;
+              var tog = el2.querySelector('.mlg-graph-toggle');
+              var pan = el2.querySelector('.mlg-graph-panel');
+              if (tog) tog.setAttribute('data-sid', sid);
+              if (pan) pan.setAttribute('data-sid', sid);
+
+              // restore open state if needed
+              var state = UI_STATE.get(sid);
+              if (state && state.open && pan){
+                pan.classList.add('open');
+                if (tog) tog.setAttribute('aria-expanded','true');
+                openPanel(pan, src, st, state.param || 'temp');
+              }
+            }catch(_){}
+          }, 0);
+        }catch(_){}
+      });
+      // Se qualche altra patch chiude/ricostruisce il popup subito dopo l'interazione,
+      // riapriamo e ripristiniamo lo stato dei grafici.
+      map.on('popupclose', function(ev){
+        try{
+          if (!ev || !ev.popup) return;
+          var src = ev.popup._source;
+          if (!src) return;
+          var st = src.__station;
+          if (!st) return;
+          var key = ensureMarkerGraphSid(src, st);
+          var state = UI_STATE.get(key);
+          if (!state || !state.open) return;
+          // Se l'utente ha cliccato/toccato la mappa, non riaprire il popup
+          try{ if (typeof __MLG_LAST_MAP_CLICK==='number' && (Date.now() - __MLG_LAST_MAP_CLICK) < 450) return; }catch(_){ }
+          if (Date.now() > __POP_KEEPALIVE_UNTIL) return;
+
+          // Reopen the popup and restore open panel
+          setTimeout(function(){
+            try{
+              if (src.openPopup) src.openPopup();
+              // after reopen, restore panel
+              setTimeout(function(){
+                try{
+                  var m = mapRef();
+                  var pop2 = m && m._popup;
+                  if (!pop2 || pop2._source !== src) return;
+                  var el = pop2.getElement && pop2.getElement();
+                  if (!el) return;
+                  var panel = el.querySelector('.mlg-graph-panel');
+                  var tog = el.querySelector('.mlg-graph-toggle');
+                  if (panel){
+                    panel.classList.add('open');
+                    if (tog) tog.setAttribute('aria-expanded','true');
+                    openPanel(panel, src, st, state.param || 'temp');
+                    relayoutPopup(pop2);
+                  }
+                }catch(_){}
+              }, 0);
+            }catch(_){}
+          }, 0);
+        }catch(_){}
+      });
+
+    }
+  }catch(_){}
+
+  // ---------- fetching + caching (keyed by marker stable sid) ----------
+  var CACHE = new Map(); // key -> {ts, data}
+  var TTL_MS = 4*60*1000;
+
+  function isWUStation(st){
+    // 1) explicit source flag if present
+    try{
+      var src = (st && (st.source || st.src || st.provider || st.network || '')) + '';
+      if (src){
+        var s = src.toLowerCase();
+        if (s.indexOf('meteohub')>=0) return false;
+        if (s.indexOf('wu')>=0 || s.indexOf('wunderground')>=0 || s.indexOf('weather.com')>=0) return true;
+      }
+    }catch(_){}
+
+    // 2) id pattern (WU PWS ids are typically like IMENDI13 / ICELIC3 etc.)
+    var id = '';
+    try{ id = getStationId(st); }catch(_){}
+    if (id && /^I[A-Z0-9]{3,}$/i.test(String(id))) return true;
+
+    // 3) check configured list (most reliable when ids are correct)
+    try{
+      if (typeof WU_STATIONS !== 'undefined' && Array.isArray(WU_STATIONS)){
+        for (var i=0;i<WU_STATIONS.length;i++){
+          if (WU_STATIONS[i] && String(WU_STATIONS[i].id)===String(id)) return true;
+        }
+      }
+      var __ws = (typeof window!=='undefined' && window.MLG_WU && Array.isArray(window.MLG_WU.STATIONS)) ? window.MLG_WU.STATIONS : null;
+      if(__ws){
+        for (var j=0;j<__ws.length;j++){
+          if (__ws[j] && String(__ws[j].id)===String(id)) return true;
+        }
+      }
+    }catch(_){}
+
+    // 4) last resort: name contains (WU)
+    return /\(WU\)/i.test(String(st && st.name || ''));
+  }
+
+  function productPool(st){ return st && (st.prod || st.products || st["var"] || st.variables || st); }
+  function getProd(st, code){
+    var P = productPool(st); if (!P) return null;
+    if (Array.isArray(P)){
+      for (var i=0;i<P.length;i++){
+        var p=P[i];
+        var v=(p && (p.var||p.code||p.proddef||p.prodDef||p.product||p.product_id||''))+"";
+        if (v.toUpperCase()===(String(code)).toUpperCase()) return p;
+      }
+      return null;
+    }
+    if (typeof P === "object") return P[code] || P[String(code)] || null;
+    return null;
+  }
+  function series(prod){
+    var raw = prod && (prod.val || prod.values || prod.series || prod.data || prod);
+    var out=[];
+    if (Array.isArray(raw)){
+      for (var i=0;i<raw.length;i++){
+        var r=raw[i];
+        var val = r && (r.val!=null ? r.val : (r.value!=null ? r.value : null));
+        var time = r && (r.ref || r.reftime || r.time || r.ts || r.epoch);
+        if (val!=null){
+          out.push({val:Number(val), time:time});
+        }
+      }
+    }
+    return out.filter(function(x){ return x && x.val!=null && isFinite(x.val); });
+  }
+  function asC(v){ return (v!=null && isFinite(v)) ? (v>120? (v-273.15): v) : null; }
+  function asKmH(val, unit){
+    if (val==null || !isFinite(val)) return null;
+    var u = String(unit||'').toUpperCase();
+    if (u.indexOf('M/S')>=0) return val*3.6;
+    if (u.indexOf('KM/H')>=0 || u.indexOf('KMH')>=0) return val;
+    if (u.indexOf('KT')>=0 || u.indexOf('KNOT')>=0) return val*1.852;
+    return (val<60? val*3.6 : val);
+  }
+  function cumRainFromCounter(points){
+    var acc=0, prev=null, out=[];
+    for (var i=0;i<points.length;i++){
+      var p=points[i]; if(!p) continue;
+      var t=parseTimeAny(p.time); if(!t) continue;
+      var v=Number(p.val); if(!isFinite(v)) continue;
+      if(prev==null){ prev=v; out.push({t:t, v:0}); continue; }
+      var dv=v-prev;
+      if (isFinite(dv) && dv>=0 && dv<200) acc += dv;
+      prev=v;
+      out.push({t:t, v:acc});
+    }
+    return out;
+  }
+
+  async function fetchMeteohubRaw(st){
+    var now = new Date();
+    var from = new Date(now.getTime());
+    from.setUTCHours(0,0,0,0);
+
+    var fromStr = fmtSpaceUTC(from), toStr = fmtSpaceUTC(now);
+    var q = null;
+    try{ if (typeof buildStableQ === 'function') q = buildStableQ(fromStr, toStr); }catch(_){}
+    if (!q){
+      q = "reftime:>="+fromStr+",<="+toStr+";license:CCBY_COMPLIANT;product:B12101,B11002,B11001,B11041,B11042,B13003,B13011";
+    }
+
+    var u = new URL("https://meteohub.agenziaitaliameteo.it/api/observations");
+    u.searchParams.set("q", q);
+    u.searchParams.set("lat", String(st.lat));
+    u.searchParams.set("lon", String(st.lon));
+    u.searchParams.set("networks", "dpcn-calabria");
+    u.searchParams.set("stationDetails", "true");
+    u.searchParams.set("allStationProducts", "true");
+    u.searchParams.set("limit", "200");
+
+    var fetcher = (typeof window.fetchJSON === 'function') ? window.fetchJSON : null;
+    var res = fetcher ? await fetcher(u.toString(), 30000) : await (await fetch(u.toString(), {cache:"no-store"})).json();
+    var list = Array.isArray(res) ? res : (res && (res.stations || res.data || res.results || res.items)) || [];
+    if (!Array.isArray(list) || !list.length) return null;
+
+    var sid = String(getStationId(st));
+    function stationIdFromRaw(x){
+      return String((x && (x.id || x.station_id || x.code)) || (x && x.stationDetails && (x.stationDetails.id||x.stationDetails.code)) || '');
+    }
+    for (var i=0;i<list.length;i++){
+      if (stationIdFromRaw(list[i])===sid) return list[i];
+    }
+    // else closest by coords
+    var best = list[0], bestD = 1e18;
+    for (var j=0;j<list.length;j++){
+      var x=list[j];
+      var la = Number(x.lat || x.latitude || (x.stationDetails && (x.stationDetails.lat||x.stationDetails.latitude)));
+      var lo = Number(x.lon || x.longitude || (x.stationDetails && (x.stationDetails.lon||x.stationDetails.longitude)));
+      if (!isFinite(la) || !isFinite(lo)) continue;
+      var d = Math.pow(la-Number(st.lat),2) + Math.pow(lo-Number(st.lon),2);
+      if (d<bestD){ bestD=d; best=x; }
+    }
+    return best;
+  }
+
+  async function fetchWURaw(st){
+    var key = (typeof WU_API_KEY !== 'undefined' && WU_API_KEY) ? WU_API_KEY : (typeof window!=='undefined' && window.MLG_WU && window.MLG_WU.API_KEY ? window.MLG_WU.API_KEY : '');
+    if (!key) throw new Error('WU API key mancante');
+    var id = getStationId(st);
+
+    function yyyymmdd(d){
+      return String(d.getFullYear()) + pad(d.getMonth()+1) + pad(d.getDate());
+    }
+    async function getJson(url){
+      var r = await fetch(url, {cache:"no-store"});
+      var j = await r.json().catch(function(){ return null; });
+      // Weather.com sometimes returns 200 with {errors:[...]} or {error:...}
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      if (j && (j.errors || j.error)) throw new Error((j.error && (j.error.message||j.error)) || (Array.isArray(j.errors) ? (j.errors[0] && (j.errors[0].message||j.errors[0].error||j.errors[0])) : 'WU error'));
+      return j;
+    }
+    function hasObs(j){
+      return j && Array.isArray(j.observations) && j.observations.length >= 2;
+    }
+
+    // 1) primary: 1day observations
+    var url1 = "https://api.weather.com/v2/pws/observations/all/1day?stationId="+encodeURIComponent(id)+"&format=json&units=m&numericPrecision=decimal&apiKey="+encodeURIComponent(key);
+    try{
+      var j1 = await getJson(url1);
+      if (hasObs(j1)) return j1;
+    }catch(_){}
+
+    // 2) fallback: history today
+    var now = new Date();
+    var url2 = "https://api.weather.com/v2/pws/history/all?stationId="+encodeURIComponent(id)+"&format=json&units=m&numericPrecision=decimal&date="+encodeURIComponent(yyyymmdd(now))+"&apiKey="+encodeURIComponent(key);
+    try{
+      var j2 = await getJson(url2);
+      if (hasObs(j2)) return j2;
+    }catch(_){}
+
+    // 3) fallback: merge yesterday + today (some stations return sparse today)
+    try{
+      var y = new Date(now.getTime()-24*3600*1000);
+      var url3a = "https://api.weather.com/v2/pws/history/all?stationId="+encodeURIComponent(id)+"&format=json&units=m&numericPrecision=decimal&date="+encodeURIComponent(yyyymmdd(y))+"&apiKey="+encodeURIComponent(key);
+      var j3a = await getJson(url3a);
+      var j3b = await getJson(url2);
+      var a = (j3a && j3a.observations) || [];
+      var b = (j3b && j3b.observations) || [];
+      var merged = a.concat(b);
+      // de-dup by epoch/obsTime
+      var seen = new Set();
+      var out = [];
+      for (var i=0;i<merged.length;i++){
+        var o = merged[i]; if(!o) continue;
+        var k = String(o.epoch!=null? o.epoch : (o.obsTimeUtc||o.obsTimeLocal||i));
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(o);
+      }
+      if (out.length >= 2) return {observations: out};
+    }catch(_){}
+
+    // If we got here, we cannot build a chart
+    throw new Error('WU: nessuna serie disponibile (endpoint history/1day vuoti o bloccati)');
+  }
+
+  function buildSeriesFromMeteohub(raw){
+    if(!raw) return null;
+    var T   = getProd(raw,"B12101");
+    var RH  = getProd(raw,"B13003");
+    var WS  = getProd(raw,"B11002");
+    var WG  = getProd(raw,"B11041") || getProd(raw,"B11042");
+    var RR  = getProd(raw,"B13011");
+
+    var out = {};
+    out.temp = series(T).map(function(p){ return {t: parseTimeAny(p.time), v: asC(p.val)}; }).filter(function(p){ return p.t && p.v!=null && isFinite(p.v); });
+    out.rh   = series(RH).map(function(p){ return {t: parseTimeAny(p.time), v: Number(p.val)}; }).filter(function(p){ return p.t && isFinite(p.v); });
+    out.wind = series(WS).map(function(p){ return {t: parseTimeAny(p.time), v: asKmH(Number(p.val), WS && WS.unit)}; }).filter(function(p){ return p.t && isFinite(p.v); });
+    out.gust = series(WG).map(function(p){ return {t: parseTimeAny(p.time), v: asKmH(Number(p.val), WG && WG.unit)}; }).filter(function(p){ return p.t && isFinite(p.v); });
+    var rr = series(RR);
+    out.rain = cumRainFromCounter(rr.map(function(p){ return {time:p.time, val:p.val}; }));
+
+    var start = new Date(); start.setUTCHours(0,0,0,0);
+    Object.keys(out).forEach(function(k){
+      out[k] = (out[k]||[]).filter(function(p){ return p && p.t && p.t >= start; }).sort(function(a,b){ return a.t - b.t; });
+    });
+    return out;
+  }
+
+  
+  function buildSeriesFromWU(res){
+    var obs = res && res.observations;
+    if (!Array.isArray(obs) || !obs.length) return null;
+
+    // Helper: pick first finite numeric value from a list of keys (case-sensitive + some common variants)
+    function pick(obj, keys){
+      if (!obj) return null;
+      for (var i=0;i<keys.length;i++){
+        var k = keys[i];
+        if (obj[k] != null && isFinite(obj[k])) return Number(obj[k]);
+        // try lowercase variant if different
+        var kl = (typeof k === 'string') ? k.toLowerCase() : k;
+        if (kl && obj[kl] != null && isFinite(obj[kl])) return Number(obj[kl]);
+      }
+      return null;
+    }
+
+    var startLocal = new Date(); startLocal.setHours(0,0,0,0);
+    var last24 = new Date(Date.now() - 24*3600*1000);
+
+    // First pass: build full series (no day filter yet)
+    var full = { temp:[], rh:[], wind:[], gust:[], rain:[] };
+
+    for (var i=0;i<obs.length;i++){
+      var o = obs[i]; if(!o) continue;
+
+      // time: prefer local, then utc, then epoch
+      var t = parseTimeAny(
+        o.obsTimeLocal || o.obsTimeUtc ||
+        (o.epoch!=null ? (Number(o.epoch) < 1e12 ? Number(o.epoch)*1000 : Number(o.epoch)) : null)
+      );
+      if(!t) continue;
+
+      var met = o.metric || o.metric_si || o.uk_hybrid || o.imperial || {};
+
+      // WU all/1day often provides *Avg / *High / *Low fields instead of "temp"/"windSpeed"/"windGust"
+      var temp = pick(met, ['temp','tempAvg','tempMean','tempHigh','tempLow']);
+      var rh   = pick(o,   ['humidity','humidityAvg','humidityMean','humidityHigh','humidityLow']) ;
+      if (rh == null) rh = pick(met, ['humidity','humidityAvg','humidityMean','humidityHigh','humidityLow']);
+
+      var ws   = pick(met, ['windSpeed','windSpeedAvg','windSpeedMean','windSpeedHigh','windSpeedLow','windspeedAvg','windspeedHigh','windspeedLow']);
+      var wg   = pick(met, ['windGust','windgust','windGustAvg','windgustAvg','windGustHigh','windgustHigh','windGustLow','windgustLow']);
+
+      var rain = pick(met, ['precipTotal','precipTotalDay','precipTotalDaily','precipTotal1hr','precipTotal24hr','precipTotal24Hour']);
+      if (rain == null) rain = pick(o, ['precipTotal','precipTotalDay','precipTotalDaily']);
+
+      if (temp!=null) full.temp.push({t:t, v:temp});
+      if (rh!=null)   full.rh.push({t:t, v:rh});
+      if (ws!=null)   full.wind.push({t:t, v:ws});
+      if (wg!=null)   full.gust.push({t:t, v:wg});
+      if (rain!=null) full.rain.push({t:t, v:rain});
+    }
+
+    Object.keys(full).forEach(function(k){ full[k].sort(function(a,b){ return a.t - b.t; }); });
+
+    // Prefer today's local day; if too few points (timezone mismatch or sparse station), fall back to last 24h
+    function filterSince(series, since){
+      return (series||[]).filter(function(p){ return p && p.t && p.t >= since; });
+    }
+
+    var out = {
+      temp: filterSince(full.temp, startLocal),
+      rh:   filterSince(full.rh, startLocal),
+      wind: filterSince(full.wind, startLocal),
+      gust: filterSince(full.gust, startLocal),
+      rain: filterSince(full.rain, startLocal)
+    };
+
+    var hasEnough = false;
+    ['temp','rh','wind','gust','rain'].forEach(function(k){
+      if (!hasEnough && out[k] && out[k].length >= 2) hasEnough = true;
+    });
+
+    if (!hasEnough){
+      out = {
+        temp: filterSince(full.temp, last24),
+        rh:   filterSince(full.rh, last24),
+        wind: filterSince(full.wind, last24),
+        gust: filterSince(full.gust, last24),
+        rain: filterSince(full.rain, last24)
+      };
+    }
+
+    return out;
+  }
+
+
+  async function getSeries(marker, st){
+    var key = ensureMarkerGraphSid(marker, st);
+    var cached = CACHE.get(key);
+    if (cached && (Date.now()-cached.ts)<TTL_MS && cached.data) return cached.data;
+
+    var data = null;
+    if (isWUStation(st)){
+      data = buildSeriesFromWU(await fetchWURaw(st));
+    } else {
+      data = buildSeriesFromMeteohub(await fetchMeteohubRaw(st));
+    }
+
+    // Validate: at least one parameter must have >=2 points
+    var ok = false;
+    try{
+      if (data){
+        ['temp','rh','wind','gust','rain'].forEach(function(k){
+          if (!ok && data[k] && Array.isArray(data[k]) && data[k].length >= 2) ok = true;
+        });
+      }
+    }catch(_){}
+    if (!ok){
+      // Do not poison cache with empty data
+      throw new Error('Nessun dato sufficiente per i grafici (serie vuota).');
+    }
+
+    CACHE.set(key, {ts: Date.now(), data: data});
+    return data;
+  }
+
+  // ---------- chart render (tiny canvas, no libs) ----------
+  
+function fitGraphCSS(canvas){
+  try{
+    if (!canvas) return;
+    var area = canvas.parentElement;
+    if (!area) return;
+    var w = area.clientWidth || canvas.clientWidth || 0;
+    if (!w || w < 50) return;
+
+    var isMobile = (window.matchMedia && window.matchMedia('(max-width:520px)').matches) || (window.innerWidth && window.innerWidth < 520);
+
+    // Balanced aspect: slightly taller on mobile for readability, capped to avoid huge popups.
+    var h = isMobile
+      ? Math.round(Math.max(185, Math.min(235, w * 0.78)))
+      : Math.round(Math.max(205, Math.min(270, w * 0.68)));
+
+    // Apply only if changed (avoid forcing relayout loops)
+    if (area.style.height !== (h + 'px')) area.style.height = (h + 'px');
+
+    if (canvas.style.width !== '100%') canvas.style.width = '100%';
+    if (canvas.style.height !== '100%') canvas.style.height = '100%';
+  }catch(_){}
+}
+
+// --- interattività hover/tap (tooltip su linea) ---
+var CHART_STATE = window.__MLG_GRAPH_CHART_STATE || (window.__MLG_GRAPH_CHART_STATE = new WeakMap());
+
+function _nearestIdxByTime(points, tms){
+  // points sorted by time
+  var lo=0, hi=points.length-1;
+  while(lo<=hi){
+    var mid=(lo+hi)>>1;
+    var mt = points[mid].t.getTime();
+    if(mt===tms) return mid;
+    if(mt<tms) lo=mid+1; else hi=mid-1;
+  }
+  // lo is first > tms
+  var i1 = Math.max(0, Math.min(points.length-1, lo));
+  var i0 = Math.max(0, i1-1);
+  return (Math.abs(points[i0].t.getTime()-tms) <= Math.abs(points[i1].t.getTime()-tms)) ? i0 : i1;
+}
+
+function _roundRect(ctx,x,y,w,h,r){
+  r = Math.max(0, Math.min(r, Math.min(w,h)/2));
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y);
+  ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r);
+  ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h);
+  ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r);
+  ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+}
+
+function _ensureChartInteractivity(canvas){
+  if (!canvas || canvas.__mlgChartInteractive) return;
+  canvas.__mlgChartInteractive = true;
+
+  try{ canvas.style.touchAction = 'none'; }catch(_){}
+
+  function getLocalPx(ev, dpr){
+    var r = canvas.getBoundingClientRect();
+    var x = (ev.clientX - r.left) * dpr;
+    var y = (ev.clientY - r.top) * dpr;
+    return {x:x, y:y};
+  }
+  function stopEv(ev){
+    try{ ev.preventDefault(); }catch(_){}
+    try{ ev.stopPropagation(); }catch(_){}
+  }
+  function softStop(ev){
+    try{ ev.stopPropagation(); }catch(_){}
+  }
+
+  function updateFromEvent(ev, force){
+    var st = CHART_STATE.get(canvas);
+    if (!st || !st.points || !st.points.length) return;
+
+    var dpr = st.dpr || (window.devicePixelRatio||1);
+    var loc = getLocalPx(ev, dpr);
+    var x = loc.x, y = loc.y;
+
+    // inside plot area?
+    var L=st.L, T=st.T, iw=st.iw, ih=st.ih;
+    var inside = (x>=L && x<=L+iw && y>=T && y<=T+ih);
+
+    if (!inside && !st.locked && !force){
+      if (st.hoverIdx != null){
+        st.hoverIdx = null;
+        CHART_STATE.set(canvas, st);
+        try{ renderChart(canvas, st.overlayEl, st.statsEl, st.points, st.cfg, null); }catch(_){}
+      }
+      return;
+    }
+    if (!inside) return;
+
+    var t = st.x0 + ((x - L) / Math.max(1, iw)) * (st.x1 - st.x0);
+    if (t < st.x0) t = st.x0;
+    if (t > st.x1) t = st.x1;
+
+    var idx = _nearestIdxByTime(st.points, t);
+    if (idx == null) return;
+
+    if (st.hoverIdx !== idx || force){
+      st.hoverIdx = idx;
+      CHART_STATE.set(canvas, st);
+      try{ renderChart(canvas, st.overlayEl, st.statsEl, st.points, st.cfg, idx); }catch(_){}
+    }
+  }
+
+  canvas.addEventListener('pointermove', function(ev){
+    var st = CHART_STATE.get(canvas);
+    if (st && st.locked && ev.pointerType === 'mouse') return; // mouse never locks
+    if (st && st.locked && ev.pointerType !== 'mouse'){ stopEv(ev); }
+    else { softStop(ev); }
+    try{ if (typeof armKeepAlive === 'function') armKeepAlive(700); }catch(_){}
+    updateFromEvent(ev, false);
+  }, {passive:false});
+
+  canvas.addEventListener('pointerleave', function(ev){
+    var st = CHART_STATE.get(canvas);
+    if (!st || st.locked) return;
+    if (st.hoverIdx != null){
+      st.hoverIdx = null;
+      CHART_STATE.set(canvas, st);
+      try{ renderChart(canvas, st.overlayEl, st.statsEl, st.points, st.cfg, null); }catch(_){}
+    }
+  }, {passive:true});
+
+  canvas.addEventListener('pointerdown', function(ev){
+    var st = CHART_STATE.get(canvas);
+    if (!st) return;
+    try{ if (canvas.setPointerCapture) canvas.setPointerCapture(ev.pointerId); }catch(_){}
+    try{ if (typeof armKeepAlive === 'function') armKeepAlive(1400); }catch(_){}
+
+    // Touch: tap to toggle lock (persistent tooltip). Mouse: just hover.
+    if (ev.pointerType === 'touch' || ev.pointerType === 'pen'){
+      stopEv(ev);
+      if (st.locked){
+        st.locked = false;
+        st.hoverIdx = null;
+        CHART_STATE.set(canvas, st);
+        try{ renderChart(canvas, st.overlayEl, st.statsEl, st.points, st.cfg, null); }catch(_){}
+        return;
+      }
+      st.locked = true;
+      CHART_STATE.set(canvas, st);
+      updateFromEvent(ev, true);
+      return;
+    }else{
+      softStop(ev);
+      updateFromEvent(ev, true);
+    }
+  }, {passive:false});
+
+  canvas.addEventListener('pointerup', function(ev){
+    // keep tooltip if locked (touch); nothing to do
+    try{ if (typeof armKeepAlive === 'function') armKeepAlive(900); }catch(_){}
+    if (ev.pointerType === 'touch' || ev.pointerType === 'pen'){ stopEv(ev); }
+    else { softStop(ev); }
+  }, {passive:false});
+
+  canvas.addEventListener('pointercancel', function(ev){
+    var st = CHART_STATE.get(canvas);
+    if (!st) return;
+    st.locked = false;
+    st.hoverIdx = null;
+    CHART_STATE.set(canvas, st);
+    try{ renderChart(canvas, st.overlayEl, st.statsEl, st.points, st.cfg, null); }catch(_){}
+  }, {passive:true});
+}
+
+function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
+    cfg = cfg || {};
+    var unit = cfg.unit || '';
+    var fmt = cfg.fmt || function(v){ return (Math.round(v*10)/10).toFixed(1).replace('.',','); };
+    var step = !!cfg.step;
+
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    fitGraphCSS(canvas);
+    var rect = canvas.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.max(10, Math.round(rect.width * dpr));
+    var h = Math.max(10, Math.round(rect.height * dpr));
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    ctx.clearRect(0,0,w,h);
+
+    // State (for hit-testing + redraw)
+    var st = CHART_STATE.get(canvas) || {};
+    var seriesChanged = (st.points !== points) || (st.step !== step) || (st.unit !== unit);
+    if (seriesChanged){
+      st.locked = false;
+      st.hoverIdx = null;
+    }
+    st.points = points;
+    st.cfg = cfg;
+    st.overlayEl = overlayEl;
+    st.statsEl = statsEl;
+    st.unit = unit;
+    st.fmt = fmt;
+    st.step = step;
+    st.dpr = dpr;
+
+    if (!Array.isArray(points) || points.length < 2){
+      if (overlayEl){
+        overlayEl.hidden = false;
+        overlayEl.textContent = 'Dati insufficienti per costruire il grafico.';
+      }
+      if (statsEl) statsEl.textContent = '—';
+      CHART_STATE.set(canvas, st);
+      _ensureChartInteractivity(canvas);
+      return;
+    }
+    if (overlayEl) overlayEl.hidden = true;
+
+    var x0 = points[0].t.getTime();
+    var x1 = points[points.length-1].t.getTime();
+    if (x1<=x0) x1 = x0+1;
+
+    var ymin = Infinity, ymax = -Infinity;
+    for (var i=0;i<points.length;i++){
+      var v = points[i].v;
+      if (!isFinite(v)) continue;
+      if (v<ymin) ymin=v;
+      if (v>ymax) ymax=v;
+    }
+    if (!isFinite(ymin) || !isFinite(ymax)){
+      if (overlayEl){ overlayEl.hidden=false; overlayEl.textContent='Dati non validi.'; }
+      if (statsEl) statsEl.textContent='—';
+      CHART_STATE.set(canvas, st);
+      _ensureChartInteractivity(canvas);
+      return;
+    }
+    if (ymin===ymax){ ymin -= 1; ymax += 1; }
+    else { var padY = (ymax - ymin)*0.08; ymin -= padY; ymax += padY; }
+
+    var L=40*dpr, R=10*dpr, T=10*dpr, B=22*dpr;
+    var iw = w - L - R;
+    var ih = h - T - B;
+
+    function xPix(t){ return L + ( (t - x0) / (x1 - x0) ) * iw; }
+    function yPix(v){ return T + (1 - ( (v - ymin) / (ymax - ymin) )) * ih; }
+
+    // Save geometry for interactivity
+    st.L=L; st.R=R; st.T=T; st.B=B; st.iw=iw; st.ih=ih; st.x0=x0; st.x1=x1; st.ymin=ymin; st.ymax=ymax;
+
+    ctx.save();
+    ctx.lineWidth = 1*dpr;
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.beginPath();
+    for (var gy=0; gy<=4; gy++){
+      var y = T + gy*(ih/4);
+      ctx.moveTo(L, y); ctx.lineTo(L+iw, y);
+    }
+    for (var gx=0; gx<=4; gx++){
+      var x = L + gx*(iw/4);
+      ctx.moveTo(x, T); ctx.lineTo(x, T+ih);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.font = (10*dpr)+'px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (var ly=0; ly<=4; ly++){
+      var vv = ymax - ly*( (ymax-ymin)/4 );
+      var yy = T + ly*(ih/4);
+      ctx.fillText(fmt(vv), L-6*dpr, yy);
+    }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    var start = new Date(points[0].t); start.setMinutes(0,0,0);
+    for (var hh=0; hh<=24; hh+=6){
+      var d = new Date(start); d.setHours(d.getHours()+hh);
+      var tt = d.getTime();
+      if (tt < x0 || tt > x1) continue;
+      ctx.fillText(pad(d.getHours()), xPix(tt), T+ih+4*dpr);
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.lineWidth = 2*dpr;
+    ctx.strokeStyle = 'rgba(11,101,194,0.95)';
+    ctx.beginPath();
+    for (var p=0;p<points.length;p++){
+      var px = xPix(points[p].t.getTime());
+      var py = yPix(points[p].v);
+      if (p===0){ ctx.moveTo(px, py); continue; }
+      if (step){
+        var prevY = yPix(points[p-1].v);
+        ctx.lineTo(px, prevY);
+      }
+      ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    var imin=0, imax=0;
+    for (var k=1;k<points.length;k++){
+      if (points[k].v < points[imin].v) imin=k;
+      if (points[k].v > points[imax].v) imax=k;
+    }
+    function dot(i, label, color){
+      var x = xPix(points[i].t.getTime());
+      var y = yPix(points[i].v);
+
+      var txt = String(label).toUpperCase()+': '+fmt(points[i].v)+unit;
+
+      ctx.save();
+
+      // point
+      ctx.fillStyle = color || 'rgba(0,0,0,0.75)';
+      ctx.beginPath();
+      ctx.arc(x, y, 3*dpr, 0, Math.PI*2);
+      ctx.fill();
+
+      // label (keep inside canvas, no clipping)
+      ctx.font = (10*dpr)+'px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      var tw = ctx.measureText(txt).width;
+      var padX = 5*dpr, padY = 3*dpr;
+      var bw = Math.ceil(tw + padX*2);
+      var bh = Math.ceil(10*dpr + padY*2);
+
+      // prefer above-right; flip if near edges
+      var bx = x + 7*dpr;
+      var by = y - bh - 8*dpr;
+      if (by < 4*dpr) by = y + 8*dpr;
+      if (by + bh > h - 4*dpr) by = Math.max(4*dpr, h - 4*dpr - bh);
+      if (bx + bw > w - 4*dpr) bx = x - 7*dpr - bw;
+      if (bx < 4*dpr) bx = 4*dpr;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+      ctx.lineWidth = 1*dpr;
+      _roundRect(ctx, bx, by, bw, bh, 7*dpr);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = color || 'rgba(0,0,0,0.75)';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(txt, bx+padX, by+padY);
+
+      ctx.restore();
+    }
+    dot(imin, 'MIN', 'rgba(37,99,235,0.95)');
+    if (imax !== imin) dot(imax, 'MAX', 'rgba(220,38,38,0.95)');
+
+    // Hover/tap tooltip (small + elegant)
+    if (hoverIdx == null) hoverIdx = (st && st.hoverIdx != null) ? st.hoverIdx : null;
+    if (hoverIdx != null && points[hoverIdx]){
+      var hp = points[hoverIdx];
+      var hx = xPix(hp.t.getTime());
+      var hy = yPix(hp.v);
+
+      ctx.save();
+      // guide line
+      ctx.lineWidth = 1*dpr;
+      ctx.strokeStyle = 'rgba(11,101,194,0.18)';
+      ctx.beginPath();
+      ctx.moveTo(hx, T);
+      ctx.lineTo(hx, T+ih);
+      ctx.stroke();
+
+      // point marker
+      ctx.fillStyle = 'rgba(11,101,194,0.95)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.lineWidth = 2*dpr;
+      ctx.beginPath();
+      ctx.arc(hx, hy, 4*dpr, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+
+      // tooltip bubble
+      var ttxt = fmtHM(hp.t);
+      var vtxt = fmt(hp.v)+unit;
+      ctx.font = (11*dpr)+'px system-ui, -apple-system, Segoe UI, Roboto, Arial';
+      var gap = 6*dpr;
+      var w1 = ctx.measureText(ttxt).width;
+      var w2 = ctx.measureText(vtxt).width;
+      var padX = 6*dpr, padY = 4*dpr;
+      var bw = Math.ceil(w1 + gap + w2 + padX*2);
+      var bh = Math.ceil(11*dpr + padY*2);
+
+      var bx = hx - bw/2;
+      var by = hy - (bh + 10*dpr);
+      if (by < 4*dpr) by = hy + 10*dpr;
+      if (bx < 4*dpr) bx = 4*dpr;
+      if (bx + bw > w - 4*dpr) bx = w - 4*dpr - bw;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.strokeStyle = 'rgba(11,101,194,0.30)';
+      ctx.lineWidth = 1*dpr;
+      _roundRect(ctx, bx, by, bw, bh, 7*dpr);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.textBaseline = 'top';
+      ctx.textAlign = 'left';
+      var tx = bx + padX;
+      var ty = by + padY;
+      ctx.fillStyle = 'rgba(0,0,0,0.60)';
+      ctx.fillText(ttxt, tx, ty);
+      ctx.fillStyle = 'rgba(11,101,194,0.95)';
+      ctx.fillText(vtxt, tx + w1 + gap, ty);
+
+      ctx.restore();
+    }
+
+    if (statsEl){
+      statsEl.textContent =
+        'Min: '+fmt(points[imin].v)+unit+' ('+fmtHM(points[imin].t)+')'
+        +' • Max: '+fmt(points[imax].v)+unit+' ('+fmtHM(points[imax].t)+')'
+        +' • Ultimo: '+fmt(points[points.length-1].v)+unit+' ('+fmtHM(points[points.length-1].t)+')';
+    }
+
+    CHART_STATE.set(canvas, st);
+    _ensureChartInteractivity(canvas);
+  }
+
+  var PARAMS = {
+    temp: {unit:'°C', fmt:function(v){ return (Math.round(v*10)/10).toFixed(1).replace('.',','); }},
+    rh:   {unit:'%',  fmt:function(v){ return String(Math.round(v)); }},
+    wind: {unit:' km/h', fmt:function(v){ return String(Math.round(v)); }},
+    gust: {unit:' km/h', fmt:function(v){ return String(Math.round(v)); }},
+    rain: {unit:' mm', fmt:function(v){ return (Math.round(v*10)/10).toFixed(1).replace('.',','); }, step:true}
+  };
+
+  // ---------- UI wiring ----------
+  var UI_STATE = window.__MLG_GRAPH_UI_STATE || (window.__MLG_GRAPH_UI_STATE = new Map()); // key -> {open,param}
+
+  function closest(el, sel){
+    while(el){
+      if (el.matches && el.matches(sel)) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+  function getPanelFromToggle(tog){
+    if (!tog) return null;
+    var actions = closest(tog, '.mlg-pop-actions');
+    if (actions && actions.nextElementSibling && actions.nextElementSibling.classList && actions.nextElementSibling.classList.contains('mlg-graph-panel')){
+      return actions.nextElementSibling;
+    }
+    var root = closest(tog, '.leaflet-popup-content') || closest(tog, '.leaflet-popup');
+    if (root && root.querySelector) return root.querySelector('.mlg-graph-panel');
+    return null;
+  }
+  function markParam(panel, param){
+    if (!panel) return;
+    var all = panel.querySelectorAll('.mlg-graph-param');
+    for (var i=0;i<all.length;i++){
+      var on = (all[i].getAttribute('data-param') === param);
+      all[i].classList.toggle('on', on);
+      all[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+  }
+
+  async function openPanel(panel, marker, st, desiredParam){
+    if (!panel) return;
+    marker = marker || getActivePopupSource();
+    st = st || (marker && marker.__station) || getActivePopupStation();
+    if (!marker || !st) return;
+
+    var key = ensureMarkerGraphSid(marker, st);
+
+    panel.classList.add('open');
+
+    var state = UI_STATE.get(key) || {};
+    state.open = true;
+    if (desiredParam) state.param = desiredParam;
+    UI_STATE.set(key, state);
+
+    var overlay = panel.querySelector('.mlg-graph-overlay');
+    var canvas  = panel.querySelector('.mlg-graph-canvas');
+    var statsEl = panel.querySelector('.mlg-graph-stats');
+
+    var data = (CACHE.get(key) && CACHE.get(key).data) || null;
+    if (!data){
+      if (overlay){ overlay.hidden=false; overlay.textContent='Caricamento dati…'; }
+      try{
+        data = await getSeries(marker, st);
+      }catch(err){
+        if (overlay){ overlay.hidden=false; overlay.textContent='Errore nel caricare i dati: '+(err && (err.message||err) ? (err.message||err) : ''); }
+        if (statsEl) statsEl.textContent = '—';
+        return;
+      }
+    }
+
+    var param = (state && state.param) || null;
+    if (!param){
+      var btnOn = panel.querySelector('.mlg-graph-param.on');
+      param = (btnOn && btnOn.getAttribute('data-param')) || 'temp';
+      state.param = param; UI_STATE.set(key, state);
+    }
+    markParam(panel, param);
+
+    // Ensure popup has its final size before drawing, otherwise canvas bitmap gets scaled (blurry).
+    try{ fitGraphCSS(canvas); }catch(_){ }
+    try{ armKeepAlive(1400); relayoutPopup(); }catch(_){}
+
+    requestAnimationFrame(function(){
+      try{ renderChart(canvas, overlay, statsEl, (data && data[param]) || [], PARAMS[param] || {}); }catch(_){}
+      requestAnimationFrame(function(){
+        try{ renderChart(canvas, overlay, statsEl, (data && data[param]) || [], PARAMS[param] || {}); }catch(_){}
+      });
+    });
+
+    try{ armKeepAlive(1400); relayoutPopup(); }catch(_){ }
+  }
+
+  function closePanel(panel, marker, st){
+    if (!panel) return;
+    marker = marker || getActivePopupSource();
+    st = st || (marker && marker.__station) || getActivePopupStation();
+    panel.classList.remove('open');
+    try{
+      if (marker && st){
+        var key = ensureMarkerGraphSid(marker, st);
+        var state = UI_STATE.get(key) || {};
+        state.open = false;
+        UI_STATE.set(key, state);
+      }
+    }catch(_){}
+    try{ armKeepAlive(1400); relayoutPopup(); }catch(_){ }
+  }
+
+  function stopAll(ev){
+    try{ ev.preventDefault(); }catch(_){}
+    try{ ev.stopPropagation(); }catch(_){}
+    try{ if (ev.stopImmediatePropagation) ev.stopImmediatePropagation(); }catch(_){}
+  }
+
+  document.addEventListener('click', function(ev){
+    var t = ev.target;
+
+    var tog = closest(t, '.mlg-graph-toggle');
+    if (tog){
+      stopAll(ev);
+
+      var panel = getPanelFromToggle(tog);
+      var marker = getActivePopupSource();
+      var st = marker && marker.__station;
+      if (!panel || !marker || !st) return;
+
+      // force stable sid on DOM (optional)
+      var key = ensureMarkerGraphSid(marker, st);
+      try{ tog.setAttribute('data-sid', key); panel.setAttribute('data-sid', key); }catch(_){}
+
+      var isOpen = panel.classList.contains('open');
+      tog.setAttribute('aria-expanded', String(!isOpen));
+
+      if (isOpen){
+        closePanel(panel, marker, st);
+      } else {
+        var state = UI_STATE.get(key);
+        openPanel(panel, marker, st, state && state.param ? state.param : null);
+      }
+      return;
+    }
+
+    var pbtn = closest(t, '.mlg-graph-param');
+    if (pbtn){
+      stopAll(ev);
+
+      var panel2 = closest(pbtn, '.mlg-graph-panel');
+      var marker2 = getActivePopupSource();
+      var st2 = marker2 && marker2.__station;
+      if (!panel2 || !marker2 || !st2) return;
+
+      var param = pbtn.getAttribute('data-param') || 'temp';
+      var key2 = ensureMarkerGraphSid(marker2, st2);
+
+      var stState = UI_STATE.get(key2) || {};
+      stState.open = true;
+      stState.param = param;
+      UI_STATE.set(key2, stState);
+
+      markParam(panel2, param);
+
+      var data = CACHE.get(key2) && CACHE.get(key2).data;
+      if (!data){
+        openPanel(panel2, marker2, st2, param);
+        return;
+      }
+      var overlay = panel2.querySelector('.mlg-graph-overlay');
+      var canvas  = panel2.querySelector('.mlg-graph-canvas');
+      var statsEl = panel2.querySelector('.mlg-graph-stats');
+      try{ fitGraphCSS(canvas); }catch(_){ }
+      try{ armKeepAlive(1400); relayoutPopup(); }catch(_){}
+
+      // Draw twice after layout to guarantee a sharp canvas on first paint
+      renderChart(canvas, overlay, statsEl, (data[param]||[]), PARAMS[param]||{});
+      requestAnimationFrame(function(){
+        try{ renderChart(canvas, overlay, statsEl, (data[param]||[]), PARAMS[param]||{}); }catch(_){}
+      });
+
+      try{ armKeepAlive(1400); relayoutPopup(); }catch(_){ }      return;
+    }
+  }, true);
+
+  document.addEventListener('mousedown', function(ev){
+    var t = ev.target;
+    if (closest(t, '.mlg-graph-toggle') || closest(t, '.mlg-graph-param')) stopAll(ev);
+  }, true);
+  document.addEventListener('touchstart', function(ev){
+    var t = ev.target;
+    if (closest(t, '.mlg-graph-toggle') || closest(t, '.mlg-graph-param')) stopAll(ev);
+  }, true);
+  document.addEventListener('pointerdown', function(ev){
+    var t = ev.target;
+    if (closest(t, '.mlg-graph-toggle') || closest(t, '.mlg-graph-param') || closest(t, '.mlg-graph-panel')){
+      // mark as popup interaction to prevent Leaflet pre-click close
+      armKeepAlive(1400);
+      // Allow canvas to receive pointer events for tooltip; it will stop propagation itself.
+      if (!closest(t, '.mlg-graph-canvas')) stopAll(ev);
+    }
+  }, true);
+  document.addEventListener('pointerup', function(ev){
+    var t = ev.target;
+    if (closest(t, '.mlg-graph-toggle') || closest(t, '.mlg-graph-param') || closest(t, '.mlg-graph-panel')){
+      armKeepAlive(900);
+      if (!closest(t, '.mlg-graph-canvas')) stopAll(ev);
+    }
+  }, true);
+  document.addEventListener('wheel', function(ev){
+    var t = ev.target;
+    if (closest(t, '.mlg-graph-panel')){ armKeepAlive(700); stopAll(ev); }
+  }, {capture:true, passive:false});
+
+
+
+  // ---------- Robustness: wrap setContent to re-inject + restore open state even if popup is rebuilt ----------
+  try{
+    if (window.L && window.L.Popup && !window.L.Popup.prototype.__mlgGraphsSetContentWrapped){
+      var __origSetContent = window.L.Popup.prototype.setContent;
+      window.L.Popup.prototype.setContent = function(content){
+        var marker = null, st = null, key = null;
+        try{
+          marker = this && this._source;
+          st = marker && marker.__station;
+          if (marker && st) key = ensureMarkerGraphSid(marker, st);
+          if (st && typeof content === 'string') content = injectIntoPopupHTML(content, st);
+        }catch(_){}
+
+        var ret = __origSetContent.call(this, content);
+
+        try{
+          if (marker && st && key){
+            var state = UI_STATE.get(key);
+            if (state && state.open){
+              var self = this;
+              setTimeout(function(){
+                try{
+                  var el = self.getElement && self.getElement();
+                  if (!el) return;
+                  var panel = el.querySelector('.mlg-graph-panel');
+                  var tog = el.querySelector('.mlg-graph-toggle');
+                  if (tog) tog.setAttribute('data-sid', key);
+                  if (panel) panel.setAttribute('data-sid', key);
+                  if (panel){
+                    panel.classList.add('open');
+                    if (tog) tog.setAttribute('aria-expanded','true');
+                    openPanel(panel, marker, st, state.param || 'temp');
+                  }
+                }catch(_){}
+              }, 0);
+            }
+          }
+        }catch(_){}
+
+        return ret;
+      };
+      window.L.Popup.prototype.__mlgGraphsSetContentWrapped = true;
+    }
+  }catch(_){}
+})();
+</script>
 
 </body>
 </html>
