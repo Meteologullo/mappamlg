@@ -1732,11 +1732,40 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
     }
     return out.filter(function(x){return x.val!=null;});
   }
+  function _mhParseTime(x){
+    if (x == null) return null;
+    if (x instanceof Date) return isFinite(x) ? x : null;
+    if (typeof x === 'number' && isFinite(x)) return new Date(x < 1e12 ? x*1000 : x);
+    var s = String(x).trim();
+    if (!s) return null;
+    if (/^\d+$/.test(s)){
+      var n = Number(s);
+      if (isFinite(n)) return new Date(n < 1e12 ? n*1000 : n);
+    }
+    // Normalize common formats
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)){
+      s = s.replace(' ','T');
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s += ':00';
+    }else if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)){
+      s += ':00';
+    }
+    // MeteoHub timestamps are UTC but often come without timezone: force UTC
+    if (!/[zZ]$/.test(s) && !/[+\-]\d{2}:?\d{2}$/.test(s) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)){
+      s += 'Z';
+    }
+    var d = new Date(s);
+    return isFinite(d) ? d : null;
+  }
   function todayOnly(arr){
-    var d=new Date(); var y=d.getUTCFullYear(), m=d.getUTCMonth()+1, dd=d.getUTCDate();
-    var dayStr = y+"-"+String(m).padStart(2,'0')+"-"+String(dd).padStart(2,'0');
-    var s=(arr||[]).filter(function(p){ return p.time && String(p.time).slice(0,10)===dayStr; });
-    s.sort(function(a,b){ return new Date(a.time)-new Date(b.time); }); return s;
+    // Local-day window (midnight -> midnight), consistent with "giornaliera"
+    var start = new Date(); start.setHours(0,0,0,0);
+    var end = new Date(start); end.setDate(start.getDate()+1);
+    var s = (arr||[]).filter(function(p){
+      var t = _mhParseTime(p && p.time);
+      return t && t >= start && t < end;
+    });
+    s.sort(function(a,b){ return (_mhParseTime(a.time)||0) - (_mhParseTime(b.time)||0); });
+    return s;
   }
   function rainTodayCalc(seriesAll){
     var s=todayOnly(seriesAll); if (!s.length) return 0;
@@ -1751,7 +1780,7 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
   function latestObsTime(){
     var best=null; var args=Array.prototype.slice.call(arguments);
     for (var i=0;i<args.length;i++){
-      var p=args[i]; if(!p) continue; var s=series(p); if(s && s.length){ var tt=new Date(s[s.length-1].time); if(isFinite(tt)) best = (best && best>tt)? best : tt; }
+      var p=args[i]; if(!p) continue; var s=series(p); if(s && s.length){ var tt=_mhParseTime(s[s.length-1].time); if(isFinite(tt)) best = (best && best>tt)? best : tt; }
     }
     return best;
   }
@@ -1799,27 +1828,86 @@ header.mlg-banner.mlg-sticky{ z-index: 5000 !important; }
       return val<60? val*3.6 : val;
     }
     var rhLast = lastVal(RH);
-    var wsKmH = asKmH(lastVal(WS), WS && WS.unit);
-    var wgKmH = asKmH(lastVal(WG), WG && WG.unit);
-    var wdDeg = lastVal(WD);
+var wsKmH = asKmH(lastVal(WS), WS && WS.unit);
+
+// --- MeteoHub: gust can expose both scalar "val" and an array ("values"/"series"/"data").
+// Some stations may not publish gust at all (missing product) or may set prod.val to "0.0" even when an array contains real gusts.
+// For the "raffica" display we want the DAILY max up to now:
+//   1) prefer gust products (B11041/B11042) if available
+//   2) fallback to today's max wind speed (B11002) if gust is missing/empty
+// This fix is intentionally scoped to gust only (no other fields changed).
+function _seriesPreferArray(prod){
+  if (!prod) return [];
+  var raw = null;
+  if (Array.isArray(prod.values)) raw = prod.values;
+  else if (Array.isArray(prod.series)) raw = prod.series;
+  else if (Array.isArray(prod.data)) raw = prod.data;
+  else if (Array.isArray(prod.val)) raw = prod.val;
+  else if (Array.isArray(prod)) raw = prod;
+  else return series(prod);
+  var out=[];
+  for (var i=0;i<raw.length;i++){
+    var r=raw[i], val=r&&(notNull(r.val)? r.val : r.value), time=r&&(r.ref||r.reftime||r.time||r.ts);
+    if (notNull(val)) out.push({val: Number(val), time: time});
+  }
+  out = out.filter(function(x){return x.val!=null && isFinite(x.val);});
+  out.sort(function(a,b){ return (_mhParseTime(a.time)||0)-(_mhParseTime(b.time)||0); });
+  return out;
+}
+function _lastValPreferArray(prod){
+  if (!prod) return null;
+  var s = _seriesPreferArray(prod);
+  if (s.length) return s[s.length-1].val;
+  return toNum((prod && (prod.val!=null? prod.val : prod.value)));
+}
+
+// current gust (may be null if missing)
+var wgKmH = asKmH(_lastValPreferArray(WG), WG && WG.unit);
+
+// fallback: today's max wind speed (useful for stations without gust product)
+var wsMaxDay = (function(){
+  try{
+    var s = todayOnly(series(WS)).map(function(p){ return asKmH(p.val, WS && WS.unit); })
+      .filter(function(v){ return v!=null && isFinite(v); });
+    if (s && s.length) return Math.max.apply(null, s);
+  }catch(_){ }
+  return null;
+})();
+
+// daily max gust if available, otherwise fallback to wsMaxDay, otherwise current gust
+var wgMaxDay = (function(){
+  try{
+    var s = todayOnly(_seriesPreferArray(WG)).map(function(p){ return asKmH(p.val, WG && WG.unit); })
+      .filter(function(v){ return v!=null && isFinite(v); });
+    if (s && s.length){
+      var m = Math.max.apply(null, s);
+      // if gust series exists but is all zeros, treat as missing and fallback
+      if (m > 0) return m;
+    }
+  }catch(_){ }
+  if (wsMaxDay!=null && isFinite(wsMaxDay)) return wsMaxDay;
+  return wgKmH;
+})();
+var wdDeg = lastVal(WD);
     var rainToday = rainTodayCalc(series(RR));
     var updatedAt = latestObsTime(T,RH,WS,WG,WD,RR);
 
-    return {id:id,lat:lat,lon:lon,name:name,t:tLast,rh:rhLast,ws:wsKmH,wg:wgKmH,wd:wdDeg,rain:rainToday,tMin:tMin,tMax:tMax,updatedAt: updatedAt, source:'meteohub'};
+    return {id:id,lat:lat,lon:lon,name:name,t:tLast,rh:rhLast,ws:wsKmH,wg:wgKmH,wgMax:wgMaxDay,wd:wdDeg,rain:rainToday,tMin:tMin,tMax:tMax,updatedAt: updatedAt, source:'meteohub'};
   }
 
   
   function buildPopupHTML(st){
     var ventoPart = (st.ws!=null? ("<span class=\"mlg-val\" style=\"white-space:nowrap\">"+st.ws.toFixed(0)+"&nbsp;km/h</span>") : "--");
     if (st.wd!=null) ventoPart += " ("+st.wd.toFixed(0)+"&deg;)";
-    var rafficaPart = (st.wg!=null? ("<span class=\"mlg-val\" style=\"white-space:nowrap\">"+st.wg.toFixed(0)+"&nbsp;km/h</span>") : "--");
+    var wgShow = (st.wgMax!=null && isFinite(st.wgMax)) ? Number(st.wgMax) : (st.wg!=null && isFinite(st.wg) ? Number(st.wg) : null);
+    var rafficaPart = (wgShow!=null? ("<span class=\"mlg-val mlg-popup-raffica\" style=\"white-space:nowrap\">"+wgShow.toFixed(0)+"&nbsp;km/h</span>") : "--");
     var updated = st.updatedAt ? ('<div style="font-size:11px;color:#6b6b6b;margin-top:4px">Aggiornato: '+fmtLocal(st.updatedAt)+'</div>') : '';
 
     // Conditional lines: hide humidity if 0; hide wind/raffica if both 0 (or null)
     var humidLine = ((st.rh==null) || Number(st.rh)===0)
       ? ''
       : ('<div><b>Umidit&agrave;:</b> <span class=\"mlg-val\">'+st.rh.toFixed(0)+'</span>%</div>');
-    var windLine = (((st.ws==null || Number(st.ws)===0) && (st.wg==null || Number(st.wg)===0))
+    var windLine = (((st.ws==null || Number(st.ws)===0) && (wgShow==null || Number(wgShow)===0))
       ? ''
       : ('<div style="white-space:nowrap"><b>Vento:</b> ' + ventoPart + ' / <b>Raffica:</b> ' + rafficaPart + '</div>'));
 
@@ -2103,6 +2191,7 @@ function bubbleMarker(st){
         rh: o.humidity!=null? Number(o.humidity) : null,
         ws: met.windSpeed!=null? Number(met.windSpeed) : null,
         wg: met.windGust!=null? Number(met.windGust) : null,
+        wgMax: null,
         wd: o.winddir!=null? Number(o.winddir) : null,
         rain: met.precipTotal!=null? Number(met.precipTotal) : 0,
         tMin: null,
@@ -2233,6 +2322,7 @@ for (const st of wu.list){
                       if (ex){
                         if (ex.min != null) st.tMin = ex.min;
                         if (ex.max != null) st.tMax = ex.max;
+                        if (ex.gustMax != null) st.wgMax = ex.gustMax;
                         try{ m.setPopupContent(buildPopupHTML(st)); }catch(_){}
                         try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){}
                       }
@@ -2334,6 +2424,13 @@ renderStations(item.norm);
       m.__sid = _prefix + ':' + String(_baseId || (m && m._leaflet_id) || '');
     }catch(_){}
     m.__station = st; window.__ALL_MARKERS.push(m);
+    // Quando si apre un popup, prova ad allineare subito la raffica max MeteoHub usando la stessa fonte dei grafici
+    try{
+      m.on('popupopen', function(){
+        try{ if (typeof window.__prefetchMeteohubGustMaxOne==='function') window.__prefetchMeteohubGustMaxOne(m); }catch(_){ }
+      });
+    }catch(_){ }
+
   }catch(_){}
   try{ if(window.__scheduleRanking) window.__scheduleRanking(); }catch(_){}
   try{ if(window.__scheduleApplyMode) window.__scheduleApplyMode(); }catch(_){ }
@@ -2380,7 +2477,152 @@ renderStations(item.norm);
     return L.divIcon({className:'t-label', html:html, popupAnchor:[0,-12]});
   }
 
-  var _currentMode = 'live';
+  
+  // ---- MeteoHub: allineamento raffica max (popup + marker) con la stessa fonte dei grafici ----
+  // Nota: i grafici usano una richiesta dedicata per la singola stazione (più dati storici).
+  // Per ottenere la "raffica massima odierna" coerente, riutilizziamo quella stessa fonte in modo
+  // pigro e con throttling quando l'utente passa alla modalità "Raffiche".
+  (function(){
+    function _pad2(n){ return (n<10?'0':'')+n; }
+    function _utcDayKey(){
+      var d=new Date();
+      return d.getFullYear()+'-'+_pad2(d.getMonth()+1)+'-'+_pad2(d.getDate());
+    }
+    function _maxGust(series){
+      if (!series || !Array.isArray(series) || !series.length) return null;
+      var m=-Infinity;
+      for (var i=0;i<series.length;i++){
+        var v = series[i] && (series[i].v!=null ? Number(series[i].v) : Number(series[i].val));
+        if (isFinite(v) && v>m) m=v;
+      }
+      return isFinite(m) ? m : null;
+    }
+
+    var RUNNING = false;
+    var Q = [];
+    var CONC = 4;
+
+    function _shouldSkip(st){
+      try{
+        var dayKey = _utcDayKey();
+        if (st && st.__wgMaxDayKey === dayKey && st.__wgMaxFromGraphs!=null && isFinite(st.__wgMaxFromGraphs)) return true;
+      }catch(_){}
+      return false;
+    }
+
+    function _updatePopupIfOpen(marker, maxVal){
+      try{
+        var mp = (window._mlgMap || window.map);
+        if (!marker || !mp || !mp._popup) return;
+        var pop = mp._popup;
+        if (!pop || pop._source !== marker) return;
+        var el = pop.getElement && pop.getElement();
+        if (!el) return;
+        var node = el.querySelector('.mlg-popup-raffica');
+        if (node){
+          node.innerHTML = Number(maxVal).toFixed(0) + '&nbsp;km/h';
+        }
+      }catch(_){}
+    }
+
+    function _updateMarkerIconIfNeeded(marker, st, maxVal){
+      try{
+        if (!marker || !st) return;
+        // Rispetta il comportamento "rain-only" già implementato: non forzare visibilità fuori da modalità pioggia
+        if (st.__rainOnly && window._currentMode !== 'rain') return;
+
+        if (window._currentMode === 'gust'){
+          // Se in modalità Raffiche, applica anche il filtro outlier (valori palesemente errati)
+          try{
+            var _lim2 = (window.__GUST_OUTLIER_LIMIT!=null && isFinite(window.__GUST_OUTLIER_LIMIT)) ? Number(window.__GUST_OUTLIER_LIMIT) : null;
+            if (_lim2!=null && isFinite(maxVal) && Number(maxVal) > _lim2){
+              var mpO = (window._mlgMap || window.map);
+              if (mpO && mpO.hasLayer(marker)) mpO.removeLayer(marker);
+              return;
+            }
+          }catch(_){ }
+          var icon = iconGeneric(maxVal, 0, GUST_STOPS, 'g');
+          try{ marker.setIcon(icon); }catch(_){ }
+          // Se prima era nascosto per ws=0 & wg=0, ora può diventare visibile
+          try{
+            var ws = (st.ws!=null && isFinite(st.ws)) ? Number(st.ws) : 0;
+            var wg = (st.wgMax!=null && isFinite(st.wgMax)) ? Number(st.wgMax) : 0;
+            var hide = (!isFinite(maxVal)) || (ws===0 && wg===0);
+            if (!hide){
+              var mp2 = (window._mlgMap || window.map);
+              if (mp2 && !mp2.hasLayer(marker)) marker.addTo(mp2);
+            }
+          }catch(_){}
+        }
+      }catch(_){}
+    }
+
+    async function _fetchOne(marker){
+      var st = marker && marker.__station;
+      if (!st) return;
+      if ((st.source||'') !== 'meteohub' && (marker.__src||'') !== 'mh') return;
+      if (_shouldSkip(st)) return;
+
+      if (typeof window.__mlgGraphsGetSeries !== 'function') return;
+
+      try{
+        var data = await window.__mlgGraphsGetSeries(marker, st);
+        var maxVal = _maxGust(data && data.gust);
+        if (maxVal==null) return;
+
+        // salva su stazione
+        var dayKey = _utcDayKey();
+        st.__wgMaxFromGraphs = maxVal;
+        st.__wgMaxDayKey = dayKey;
+        if (st.wgMax==null || !isFinite(st.wgMax) || maxVal > Number(st.wgMax)) st.wgMax = maxVal;
+
+        _updatePopupIfOpen(marker, maxVal);
+        _updateMarkerIconIfNeeded(marker, st, maxVal);
+      }catch(_){}
+    }
+
+    function _pump(){
+      if (!Q.length){ RUNNING=false; return; }
+      var batch = Q.splice(0, CONC);
+      Promise.all(batch.map(_fetchOne)).finally(function(){
+        // piccolo respiro per non stressare l'API
+        setTimeout(_pump, 180);
+      });
+    }
+
+    window.__prefetchMeteohubGustMaxAll = function(){
+      try{
+        if (RUNNING) return;
+        var markers = (window.__ALL_MARKERS||[]).filter(function(m){
+          var st = m && m.__station;
+          if (!m || !st) return false;
+          var src = (st.source||'') || (m.__src||'');
+          if (String(src).toLowerCase()!=='meteohub' && String(src).toLowerCase()!=='mh') return false;
+          if (!isFinite(Number(st.lat)) || !isFinite(Number(st.lon))) return false;
+          return !_shouldSkip(st);
+        });
+        if (!markers.length) return;
+        Q = markers.slice();
+        RUNNING = true;
+        _pump();
+      }catch(_){}
+    };
+
+
+    // Fetch per una singola stazione (utile quando si apre un popup)
+    window.__prefetchMeteohubGustMaxOne = function(marker){
+      try{
+        if (!marker) return;
+        var st = marker.__station;
+        if (!st) return;
+        if (_shouldSkip(st)) return;
+        // esegui subito ma sempre con protezioni
+        _fetchOne(marker);
+      }catch(_){}
+    };
+  })();
+
+var _currentMode = 'live';
   function _applyMode(mode){
     _currentMode = mode || _currentMode;
     // attiva bottone
@@ -2407,6 +2649,51 @@ function haversineKm(lat1, lon1, lat2, lon2){
 var _stations = window.__ALL_MARKERS.map(function(m){ return m && m.__station ? m.__station : null; }).filter(Boolean);
 var _rainHeavy = _stations.filter(function(s){ return s.rain!=null && isFinite(s.rain) && s.rain>1; });
 
+var _gustOutlierLimit = null;
+if (_currentMode==='gust'){
+  try{
+    // Calcolo robusto per nascondere valori palesemente errati (sensori/bug) quando si mostra la modalità Raffiche.
+    // Regole:
+    // 1) Soglia "hard" (km/h) per evitare valori impossibili/sporchi.
+    // 2) Soglia "robusta" (Q3 + 6*IQR) per adattarsi alla distribuzione reale.
+    // 3) Se il massimo è "solo" e molto sopra il secondo massimo, abbassa la soglia vicino al secondo.
+    var _vals = [];
+    for (var _i=0; _i<_stations.length; _i++){
+      var _s = _stations[_i];
+      if(!_s) continue;
+      var _v = (_s.wgMax!=null && isFinite(_s.wgMax)) ? Number(_s.wgMax) : ((_s.wg!=null && isFinite(_s.wg)) ? Number(_s.wg) : null);
+      if(_v==null || !isFinite(_v) || _v<=0) continue;
+      _vals.push(_v);
+    }
+    _vals.sort(function(a,b){ return a-b; });
+    var _hard = 220; // km/h: oltre questa soglia in Calabria è quasi certamente un outlier (dato sporco)
+    if (_vals.length >= 8){
+      function _pct(p){
+        var idx = ( (_vals.length-1) * p );
+        var lo = Math.floor(idx), hi = Math.ceil(idx);
+        if (lo===hi) return _vals[lo];
+        var w = idx - lo;
+        return _vals[lo]*(1-w) + _vals[hi]*w;
+      }
+      var q1 = _pct(0.25), q3 = _pct(0.75);
+      var iqr = (q3 - q1);
+      var robust = q3 + 6*iqr;
+      if (!isFinite(robust) || robust<=0) robust = _hard;
+      _gustOutlierLimit = Math.max(_hard, robust);
+      // "solitario": max molto più alto del secondo max
+      var top = _vals[_vals.length-1];
+      var second = _vals[_vals.length-2];
+      if (isFinite(top) && isFinite(second) && top>150 && top>second*1.8 && (top-second)>60){
+        var soloLimit = Math.max(150, second*1.6);
+        _gustOutlierLimit = Math.min(_gustOutlierLimit, soloLimit);
+      }
+    }else{
+      _gustOutlierLimit = _hard;
+    }
+    window.__GUST_OUTLIER_LIMIT = _gustOutlierLimit;
+  }catch(_){}
+}
+
 for (var i=0;i<window.__ALL_MARKERS.length;i++){
   var m = __ALL_MARKERS[i], st = m && m.__station;
   if(!m || !st) continue;
@@ -2416,7 +2703,7 @@ for (var i=0;i<window.__ALL_MARKERS.length;i++){
   else if (_currentMode==='min') { val = st.tMin; icon = bubbleIcon(val); }
   else if (_currentMode==='max') { val = st.tMax; icon = bubbleIcon(val); }
   else if (_currentMode==='rh') { val = st.rh; icon = iconGeneric(val, 0, RH_STOPS, 'rh'); }
-  else if (_currentMode==='gust') { val = st.wg; icon = iconGeneric(val, 0, GUST_STOPS, 'g'); }
+  else if (_currentMode==='gust') { val = (st.wgMax!=null && isFinite(st.wgMax)) ? Number(st.wgMax) : st.wg; icon = iconGeneric(val, 0, GUST_STOPS, 'g'); }
   else if (_currentMode==='rain') { val = st.rain; icon = iconGeneric(val, 1, RAIN_STOPS, 'r'); }
 
   // base: se valore assente, nascondi
@@ -2428,8 +2715,13 @@ for (var i=0;i<window.__ALL_MARKERS.length;i++){
   }
   if (!hide && _currentMode==='gust'){
     var ws = (st.ws!=null && isFinite(st.ws)) ? Number(st.ws) : 0;
-    var wg = (st.wg!=null && isFinite(st.wg)) ? Number(st.wg) : 0;
+    var wg = (st.wgMax!=null && isFinite(st.wgMax)) ? Number(st.wgMax) : ((st.wg!=null && isFinite(st.wg)) ? Number(st.wg) : 0);
     hide = (ws===0 && wg===0);
+    // Nascondi outlier (valori esagerati) in modalità Raffiche
+    try{
+      var _lim = (window.__GUST_OUTLIER_LIMIT!=null && isFinite(window.__GUST_OUTLIER_LIMIT)) ? Number(window.__GUST_OUTLIER_LIMIT) : null;
+      if (_lim!=null && isFinite(val) && Number(val) > _lim) hide = true;
+    }catch(_){ }
   }
   if (!hide && _currentMode==='rain'){
     var r = (st.rain!=null && isFinite(st.rain)) ? Number(st.rain) : null;
@@ -2451,6 +2743,12 @@ if (hide){ if (map.hasLayer(m)) map.removeLayer(m); continue; }
   if (!map.hasLayer(m)) m.addTo(map);
   try{ m.setIcon(icon); }catch(_){}
 }
+
+    // In modalità Raffiche, allinea la raffica max MeteoHub alla fonte dei grafici (lazy + throttling)
+    if (_currentMode==='gust'){
+      try{ if (typeof window.__prefetchMeteohubGustMaxAll==='function') window.__prefetchMeteohubGustMaxAll(); }catch(_){ }
+    }
+
 
   }
 
@@ -2597,17 +2895,27 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
 
   function computeExtremes(list){
     console.debug("[WU][EXT][1day] computeExtremes: observations:", Array.isArray(list)?list.length:list);
-    var min = null, max = null;
-    if(!Array.isArray(list) || !list.length) return {min:null, max:null};
+    var min = null, max = null, gustMax = null;
+    if(!Array.isArray(list) || !list.length) return {min:null, max:null, gustMax:null};
+    function pick(obj, keys){
+      for (var k=0;k<keys.length;k++){ var key = keys[k]; if (obj && obj[key]!=null && obj[key]!=='' ){ return obj[key]; } }
+      return null;
+    }
+    var gustKeys = ['windGustHigh','windgustHigh','windGust','windgust','windGustAvg','windgustAvg','windGustLow','windgustLow'];
     for (var i=0;i<list.length;i++){
       var o = list[i] || {};
-      var m = o.metric || {};
-      var lo = (m.tempLow != null ? Number(m.tempLow) : (m.temp != null ? Number(m.temp) : (m.tempAvg != null ? Number(m.tempAvg) : null)));
-      var hi = (m.tempHigh != null ? Number(m.tempHigh) : (m.temp != null ? Number(m.temp) : (m.tempAvg != null ? Number(m.tempAvg) : null)));
+      var met = o.metric || {};
+      var lo = (met.tempLow != null ? Number(met.tempLow) : (met.temp != null ? Number(met.temp) : (met.tempAvg != null ? Number(met.tempAvg) : null)));
+      var hi = (met.tempHigh != null ? Number(met.tempHigh) : (met.temp != null ? Number(met.temp) : (met.tempAvg != null ? Number(met.tempAvg) : null)));
       if (lo != null && isFinite(lo)) min = (min==null? lo : Math.min(min, lo));
       if (hi != null && isFinite(hi)) max = (max==null? hi : Math.max(max, hi));
+      var g = pick(met, gustKeys);
+      if (g != null && isFinite(Number(g))){
+        var gg = Number(g);
+        gustMax = (gustMax==null? gg : Math.max(gustMax, gg));
+      }
     }
-    return {min:min, max:max};
+    return {min:min, max:max, gustMax:gustMax};
   }
 
   // --- Concurrency limiter (max 6 at a time) + small jitter to spread requests ---
@@ -2636,7 +2944,7 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
 
   window.fetchDailyExtremes = async function(stationId){
     console.debug("[WU][EXT][1day] fetchDailyExtremes called for", stationId);
-    if (!stationId) return {min:null, max:null};
+    if (!stationId) return {min:null, max:null, gustMax:null};
     if (_cache.has(stationId)) return _cache.get(stationId);
 
     const p = schedule(async function(){
@@ -2656,7 +2964,7 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
         return ex;
       }catch(e){
         console.warn("[WU][EXT][1day] FAILED for", stationId, e && (e.message||e));
-        return {min:null, max:null};
+        return {min:null, max:null, gustMax:null};
       }
     });
 
@@ -2675,7 +2983,24 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
     if(!btn || !panel) return;
     function toggle(){ var open = panel.classList.toggle('open'); btn.setAttribute('aria-expanded', open?'true':'false'); }
     btn.addEventListener('click', toggle);
-    document.addEventListener('click', function(ev){
+    
+  // Ensure default "Temp" loads immediately on first open (when no prior state)
+  function kickDefaultParam(panel){
+    if (!panel) return;
+    var btn = panel.querySelector('.mlg-graph-param.on') || panel.querySelector('.mlg-graph-param[data-param="temp"]');
+    if (!btn) return;
+    // If after a short delay we're still showing "Caricamento", trigger the same path as a manual click.
+    setTimeout(function(){
+      try{
+        var ov = panel.querySelector('.mlg-graph-overlay');
+        if (ov && !ov.hidden && /Caricamento/i.test(ov.textContent||'')){
+          btn.click();
+        }
+      }catch(_){}
+    }, 220);
+  }
+
+document.addEventListener('click', function(ev){
       if(!panel.classList.contains('open')) return;
       if(ev.target===btn || btn.contains(ev.target) || panel.contains(ev.target)) return;
       panel.classList.remove('open'); btn.setAttribute('aria-expanded','false');
@@ -2728,7 +3053,7 @@ document.getElementById('reload').onclick = function(){ document.getElementById(
       case 'tmax_desc': return st.tMax;
       case 'tmin_asc': return st.tMin;
       case 'rh_desc': return st.rh;
-      case 'wg_desc': return st.wg;
+      case 'wg_desc': return (st.wgMax!=null && isFinite(st.wgMax)) ? Number(st.wgMax) : st.wg;
       case 'rain_desc': return st.rain;
       default: return null;
     }
@@ -5487,6 +5812,32 @@ lts
     var d = new Date(s);
     return isFinite(d) ? d : null;
   }
+
+  function parseTimeMH(x){
+    if (x == null) return null;
+    if (x instanceof Date) return isFinite(x) ? x : null;
+    if (typeof x === 'number' && isFinite(x)) return new Date(x < 1e12 ? x*1000 : x);
+
+    var s = String(x).trim();
+    if (!s) return null;
+
+    // Normalize like parseTimeAny
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)){
+      s = s.replace(' ','T');
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s += ':00';
+    }else if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)){
+      s += ':00';
+    }
+
+    // MeteoHub reftime strings are UTC but often have no timezone: force UTC
+    if (!/[zZ]$/.test(s) && !/[+\-]\d{2}:?\d{2}$/.test(s) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(s)){
+      s += 'Z';
+    }
+
+    var d = new Date(s);
+    return isFinite(d) ? d : null;
+  }
+
   function escAttr(s){
     return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
@@ -5808,7 +6159,7 @@ function relayoutPopup(pop){
     var acc=0, prev=null, out=[];
     for (var i=0;i<points.length;i++){
       var p=points[i]; if(!p) continue;
-      var t=parseTimeAny(p.time); if(!t) continue;
+      var t=parseTimeMH(p.time); if(!t) continue;
       var v=Number(p.val); if(!isFinite(v)) continue;
       if(prev==null){ prev=v; out.push({t:t, v:0}); continue; }
       var dv=v-prev;
@@ -5822,7 +6173,7 @@ function relayoutPopup(pop){
   async function fetchMeteohubRaw(st){
     var now = new Date();
     var from = new Date(now.getTime());
-    from.setUTCHours(0,0,0,0);
+    from.setHours(0,0,0,0);
 
     var fromStr = fmtSpaceUTC(from), toStr = fmtSpaceUTC(now);
     var q = null;
@@ -5838,7 +6189,7 @@ function relayoutPopup(pop){
     u.searchParams.set("networks", "dpcn-calabria");
     u.searchParams.set("stationDetails", "true");
     u.searchParams.set("allStationProducts", "true");
-    u.searchParams.set("limit", "200");
+    u.searchParams.set("limit", "2000");
 
     var fetcher = (typeof window.fetchJSON === 'function') ? window.fetchJSON : null;
     var res = fetcher ? await fetcher(u.toString(), 30000) : await (await fetch(u.toString(), {cache:"no-store"})).json();
@@ -5935,14 +6286,14 @@ function relayoutPopup(pop){
     var RR  = getProd(raw,"B13011");
 
     var out = {};
-    out.temp = series(T).map(function(p){ return {t: parseTimeAny(p.time), v: asC(p.val)}; }).filter(function(p){ return p.t && p.v!=null && isFinite(p.v); });
-    out.rh   = series(RH).map(function(p){ return {t: parseTimeAny(p.time), v: Number(p.val)}; }).filter(function(p){ return p.t && isFinite(p.v); });
-    out.wind = series(WS).map(function(p){ return {t: parseTimeAny(p.time), v: asKmH(Number(p.val), WS && WS.unit)}; }).filter(function(p){ return p.t && isFinite(p.v); });
-    out.gust = series(WG).map(function(p){ return {t: parseTimeAny(p.time), v: asKmH(Number(p.val), WG && WG.unit)}; }).filter(function(p){ return p.t && isFinite(p.v); });
+    out.temp = series(T).map(function(p){ return {t: parseTimeMH(p.time), v: asC(p.val)}; }).filter(function(p){ return p.t && p.v!=null && isFinite(p.v); });
+    out.rh   = series(RH).map(function(p){ return {t: parseTimeMH(p.time), v: Number(p.val)}; }).filter(function(p){ return p.t && isFinite(p.v); });
+    out.wind = series(WS).map(function(p){ return {t: parseTimeMH(p.time), v: asKmH(Number(p.val), WS && WS.unit)}; }).filter(function(p){ return p.t && isFinite(p.v); });
+    out.gust = series(WG).map(function(p){ return {t: parseTimeMH(p.time), v: asKmH(Number(p.val), WG && WG.unit)}; }).filter(function(p){ return p.t && isFinite(p.v); });
     var rr = series(RR);
     out.rain = cumRainFromCounter(rr.map(function(p){ return {time:p.time, val:p.val}; }));
 
-    var start = new Date(); start.setUTCHours(0,0,0,0);
+    var start = new Date(); start.setHours(0,0,0,0);
     Object.keys(out).forEach(function(k){
       out[k] = (out[k]||[]).filter(function(p){ return p && p.t && p.t >= start; }).sort(function(a,b){ return a.t - b.t; });
     });
@@ -5991,7 +6342,7 @@ function relayoutPopup(pop){
       if (rh == null) rh = pick(met, ['humidity','humidityAvg','humidityMean','humidityHigh','humidityLow']);
 
       var ws   = pick(met, ['windSpeed','windSpeedAvg','windSpeedMean','windSpeedHigh','windSpeedLow','windspeedAvg','windspeedHigh','windspeedLow']);
-      var wg   = pick(met, ['windGust','windgust','windGustAvg','windgustAvg','windGustHigh','windgustHigh','windGustLow','windgustLow']);
+      var wg   = pick(met, ['windGust','windgust','windGustHigh','windgustHigh','windGustLow','windgustLow','windGustAvg','windgustAvg']);
 
       var rain = pick(met, ['precipTotal','precipTotalDay','precipTotalDaily','precipTotal1hr','precipTotal24hr','precipTotal24Hour']);
       if (rain == null) rain = pick(o, ['precipTotal','precipTotalDay','precipTotalDaily']);
@@ -6066,6 +6417,10 @@ function relayoutPopup(pop){
     CACHE.set(key, {ts: Date.now(), data: data});
     return data;
   }
+
+
+  // Expose series fetcher so main map can reuse the same MeteoHub/WU source (e.g. for daily gust max)
+  try{ window.__mlgGraphsGetSeries = getSeries; }catch(_){ }
 
   // ---------- chart render (tiny canvas, no libs) ----------
   
@@ -6308,7 +6663,13 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
       _ensureChartInteractivity(canvas);
       return;
     }
-    if (ymin===ymax){ ymin -= 1; ymax += 1; }
+    
+    // Include optional overrides (keep graph extrema consistent with popup values)
+    try{
+      if (cfg && cfg.minOverride != null && isFinite(cfg.minOverride)) ymin = Math.min(ymin, Number(cfg.minOverride));
+      if (cfg && cfg.maxOverride != null && isFinite(cfg.maxOverride)) ymax = Math.max(ymax, Number(cfg.maxOverride));
+    }catch(_){}
+if (ymin===ymax){ ymin -= 1; ymax += 1; }
     else { var padY = (ymax - ymin)*0.08; ymin -= padY; ymax += padY; }
 
     var L=40*dpr, R=10*dpr, T=10*dpr, B=22*dpr;
@@ -6379,11 +6740,12 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
       if (points[k].v < points[imin].v) imin=k;
       if (points[k].v > points[imax].v) imax=k;
     }
-    function dot(i, label, color){
+    function dot(i, label, color, valueOverride){
       var x = xPix(points[i].t.getTime());
-      var y = yPix(points[i].v);
+      var vv = (valueOverride!=null && isFinite(valueOverride)) ? Number(valueOverride) : points[i].v;
+      var y = yPix(vv);
 
-      var txt = String(label).toUpperCase()+': '+fmt(points[i].v)+unit;
+      var txt = String(label).toUpperCase()+': '+fmt(vv)+unit;
 
       ctx.save();
 
@@ -6422,8 +6784,8 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
 
       ctx.restore();
     }
-    dot(imin, 'MIN', 'rgba(37,99,235,0.95)');
-    if (imax !== imin) dot(imax, 'MAX', 'rgba(220,38,38,0.95)');
+    dot(imin, 'MIN', 'rgba(37,99,235,0.95)', cfg && cfg.minOverride!=null ? cfg.minOverride : null);
+    if (imax !== imin) dot(imax, 'MAX', 'rgba(220,38,38,0.95)', cfg && cfg.maxOverride!=null ? cfg.maxOverride : null);
 
     // Hover/tap tooltip (small + elegant)
     if (hoverIdx == null) hoverIdx = (st && st.hoverIdx != null) ? st.hoverIdx : null;
@@ -6487,9 +6849,15 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
     }
 
     if (statsEl){
+      var minV = (cfg && cfg.minOverride!=null && isFinite(cfg.minOverride)) ? Number(cfg.minOverride) : points[imin].v;
+      var maxV = (cfg && cfg.maxOverride!=null && isFinite(cfg.maxOverride)) ? Number(cfg.maxOverride) : points[imax].v;
+
+      var minT = (minV===points[imin].v) ? fmtHM(points[imin].t) : '—';
+      var maxT = (maxV===points[imax].v) ? fmtHM(points[imax].t) : '—';
+
       statsEl.textContent =
-        'Min: '+fmt(points[imin].v)+unit+' ('+fmtHM(points[imin].t)+')'
-        +' • Max: '+fmt(points[imax].v)+unit+' ('+fmtHM(points[imax].t)+')'
+        'Min: '+fmt(minV)+unit+' ('+minT+')'
+        +' • Max: '+fmt(maxV)+unit+' ('+maxT+')'
         +' • Ultimo: '+fmt(points[points.length-1].v)+unit+' ('+fmtHM(points[points.length-1].t)+')';
     }
 
@@ -6504,6 +6872,24 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
     gust: {unit:' km/h', fmt:function(v){ return String(Math.round(v)); }},
     rain: {unit:' mm', fmt:function(v){ return (Math.round(v*10)/10).toFixed(1).replace('.',','); }, step:true}
   };
+
+  function cfgFor(param, st){
+    // Base config for the param (unit/formatter/step) + optional per-station overrides
+    var base = PARAMS[param] || {};
+    var c = {};
+    // shallow copy
+    for (var k in base){ if (Object.prototype.hasOwnProperty.call(base,k)) c[k]=base[k]; }
+    // overrides to keep popup & graph extremes aligned
+    try{
+      if (param === 'temp'){
+        if (st && st.tMin != null && isFinite(st.tMin)) c.minOverride = Number(st.tMin);
+        if (st && st.tMax != null && isFinite(st.tMax)) c.maxOverride = Number(st.tMax);
+      } else if (param === 'gust'){
+        if (st && st.wgMax != null && isFinite(st.wgMax)) c.maxOverride = Number(st.wgMax);
+      }
+    }catch(_){}
+    return c;
+  }
 
   // ---------- UI wiring ----------
   var UI_STATE = window.__MLG_GRAPH_UI_STATE || (window.__MLG_GRAPH_UI_STATE = new Map()); // key -> {open,param}
@@ -6579,9 +6965,9 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
     try{ armKeepAlive(1400); relayoutPopup(); }catch(_){}
 
     requestAnimationFrame(function(){
-      try{ renderChart(canvas, overlay, statsEl, (data && data[param]) || [], PARAMS[param] || {}); }catch(_){}
+      try{ renderChart(canvas, overlay, statsEl, (data && data[param]) || [], cfgFor(param, st)); }catch(_){}
       requestAnimationFrame(function(){
-        try{ renderChart(canvas, overlay, statsEl, (data && data[param]) || [], PARAMS[param] || {}); }catch(_){}
+        try{ renderChart(canvas, overlay, statsEl, (data && data[param]) || [], cfgFor(param, st)); }catch(_){}
       });
     });
 
@@ -6606,6 +6992,22 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
 
   function stopAll(ev){
     try{ ev.preventDefault(); }catch(_){}
+
+  function kickDefaultParam(panel){
+    if (!panel) return;
+    var btn = panel.querySelector('.mlg-graph-param.on') || panel.querySelector('.mlg-graph-param[data-param="temp"]');
+    if (!btn) return;
+    // If after a short delay we're still showing "Caricamento", trigger the same path as a manual click.
+    setTimeout(function(){
+      try{
+        var ov = panel.querySelector('.mlg-graph-overlay');
+        if (ov && !ov.hidden && /Caricamento/i.test(ov.textContent||'')){
+          btn.click();
+        }
+      }catch(_){}
+    }, 220);
+  }
+
     try{ ev.stopPropagation(); }catch(_){}
     try{ if (ev.stopImmediatePropagation) ev.stopImmediatePropagation(); }catch(_){}
   }
@@ -6633,7 +7035,8 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
         closePanel(panel, marker, st);
       } else {
         var state = UI_STATE.get(key);
-        openPanel(panel, marker, st, state && state.param ? state.param : null);
+        openPanel(panel, marker, st, state && state.param ? state.param : 'temp');
+        try{ kickDefaultParam(panel); }catch(_){ }
       }
       return;
     }
@@ -6669,9 +7072,9 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
       try{ armKeepAlive(1400); relayoutPopup(); }catch(_){}
 
       // Draw twice after layout to guarantee a sharp canvas on first paint
-      renderChart(canvas, overlay, statsEl, (data[param]||[]), PARAMS[param]||{});
+      renderChart(canvas, overlay, statsEl, (data[param]||[]), cfgFor(param, st2));
       requestAnimationFrame(function(){
-        try{ renderChart(canvas, overlay, statsEl, (data[param]||[]), PARAMS[param]||{}); }catch(_){}
+        try{ renderChart(canvas, overlay, statsEl, (data[param]||[]), cfgFor(param, st2)); }catch(_){}
       });
 
       try{ armKeepAlive(1400); relayoutPopup(); }catch(_){ }      return;
@@ -6754,7 +7157,8 @@ function renderChart(canvas, overlayEl, statsEl, points, cfg, hoverIdx){
     }
   }catch(_){}
 })();
-</script>
+
+</script></script>
 
 </body>
 </html>
